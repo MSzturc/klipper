@@ -73,8 +73,10 @@ class BDPrinterProbe:
         self.z_offset = config.getfloat('z_offset')
         self.probe_calibrate_z = 0.
         self.multi_probe_pending = False
+        self.rapid_scan = False
         self.last_state = False
         self.last_z_result = 0.
+        self.homing_speed_tmp = 0
         self.gcode_move = self.printer.load_object(config, "gcode_move")
         # Infer Z position to move to during a probe
         if config.has_section('stepper_z'):
@@ -130,11 +132,24 @@ class BDPrinterProbe:
         )
         gcode = self.printer.lookup_object('gcode')
         self.dummy_gcode_cmd = gcode.create_gcode_command("", "", {})
+        self.reactor = self.printer.get_reactor()
+        self.bd_sample_timer = self.reactor.register_timer(
+            self.scan_sample_event)
+        
     def _probe_state_error(self):
         raise self.printer.command_error(
                 "Internal probe error - start/end probe session mismatch")
 
-    def start_probe_session(self, gcmd):
+    def start_probe_session(self, gcmd):   
+        self._probe_times=[]
+        if "BED_MESH_CALIBRATE" in gcmd.get_command():
+            try:
+                if self.mcu_probe.no_stop_probe is not None:
+                    self.rapid_scan = True
+                    self.reactor.update_timer(self.bd_sample_timer, self.reactor.NOW) 
+            except AttributeError as e:
+                gcmd.respond_info("%s" % str(e))
+                raise gcmd.error("%s" % str(e))
         if self.multi_probe_pending:
             self._probe_state_error()
         self.mcu_probe.multi_probe_begin()
@@ -143,9 +158,18 @@ class BDPrinterProbe:
         return self
         
     def pull_probed_results(self):
-            res = self.mcu_probe.results
-            self.mcu_probe.results = []
-            return res
+        toolhead = self.printer.lookup_object("toolhead")
+        toolhead.get_last_move_time()
+        if self.rapid_scan == True:    
+            self.bedmesh = self.printer.lookup_object('bed_mesh', None)
+            helperc = self.bedmesh.bmc.probe_mgr.probe_helper
+            while len(self.mcu_probe.results) < len(helperc.probe_points):
+                toolhead.dwell(0.1)
+            self.reactor.update_timer(self.bd_sample_timer, self.reactor.NEVER)
+            self.rapid_scan = False
+        res = self.mcu_probe.results
+        self.mcu_probe.results = []
+        return res
 
     def end_probe_session(self):
         if not self.multi_probe_pending:
@@ -186,21 +210,26 @@ class BDPrinterProbe:
 
     def _handle_home_rails_begin(self, homing_state, rails):
         endstops = [es for rail in rails for es, name in rail.get_endstops()]
-        self.bedmesh = self.printer.lookup_object('bed_mesh', None)
-        self.bedmesh.bmc.probe_mgr.probe_helper = BDProbePointsHelper(
-            self.config.getsection('bed_mesh'),
-            self.bedmesh.bmc.probe_finalize,
-            []
-        )
         self.mcu_probe.homing = 1
         if self.mcu_probe in endstops:
             self.mcu_probe.multi_probe_begin()
             self.multi_probe_pending = True
+            for i, rail in enumerate(rails):
+                if (self.mcu_probe.collision_homing == 1 
+                          and rail.homing_retract_dist == 0):
+                    self.homing_speed_tmp = rail.homing_speed
+                    rail.homing_speed = rail.second_homing_speed
+                    self.gcode.respond_info("Homing_speed at %.3f" % (rail.homing_speed))
 
     def _handle_home_rails_end(self, homing_state, rails):
         endstops = [es for rail in rails for es, name in rail.get_endstops()]
         if self.mcu_probe in endstops:
+            for i, rail in enumerate(rails):
+                if (self.homing_speed_tmp > rail.homing_speed
+                         and rail.homing_retract_dist == 0):
+                    rail.homing_speed = self.homing_speed_tmp
             self.multi_probe_end()
+            
 
     def _handle_command_error(self):
         try:
@@ -286,7 +315,47 @@ class BDPrinterProbe:
         # even number of samples
         return self._calc_mean(z_sorted[middle - 1:middle + 1])
 
+      
+    def _lookup_toolhead_pos(self, pos_time):
+        toolhead = self.printer.lookup_object('toolhead')
+        kin = toolhead.get_kinematics()
+        kin_spos = {s.get_name(): s.mcu_to_commanded_position(
+                                      s.get_past_mcu_position(pos_time))
+                    for s in kin.get_steppers()}
+        return kin.calc_position(kin_spos)
+    
+    def scan_sample_event(self, eventtime):
+        toolhead = self.printer.lookup_object("toolhead")
+        while self._probe_times:
+            pos_time = self._probe_times[0]
+            while 1:
+                systime = toolhead.reactor.monotonic()
+                est_print_time = toolhead.mcu.estimated_print_time(systime)
+                if est_print_time>=pos_time:
+                    pos = self._lookup_toolhead_pos(pos_time)
+                    intd = self.mcu_probe.BD_Sensor_Read(0)                    
+                    pos[2] = pos[2] - intd + self.mcu_probe.endstop_bdsensor_offset
+                    self.mcu_probe.results.append(pos)
+                    if len(self.mcu_probe.results) < 500:
+                        self.gcode.respond_info("probe at %.3f,%.3f is z=%.6f"
+                                            % (pos[0], pos[1], pos[2]))
+                    break
+                toolhead.reactor.pause(systime + 0.002)
+            self._probe_times.pop(0)
+            
+        return eventtime + 0.005
+            
+
+    def _scan_lookahead_cb(self, printtime):       
+        self._probe_times.append(printtime)
+
     def run_probe(self, gcmd):
+        toolhead = self.printer.lookup_object("toolhead")
+        if self.rapid_scan == True:
+            if len(self._probe_times) == 0:
+                toolhead.wait_moves() 
+            toolhead.register_lookahead_callback(self._scan_lookahead_cb)
+            return
         speed = gcmd.get_float("PROBE_SPEED", self.speed, above=0.)
         lift_speed = self.get_lift_speed(gcmd)
 
@@ -302,7 +371,7 @@ class BDPrinterProbe:
 
         must_notify_multi_probe = not self.multi_probe_pending
         if must_notify_multi_probe:
-            self.multi_probe_begin()
+            self.start_probe_session(gcmd)
         probexy = self.printer.lookup_object('toolhead').get_position()[:2]
         retries = 0
         positions = []
@@ -489,242 +558,6 @@ class BDPrinterProbe:
                 "with the above and restart the printer."
                 % (self.name, new_calibrate))
             configfile.set(self.name, 'z_offset', "%.3f" % (new_calibrate,))
-
-
-# Helper code that can probe a series of points and report the position at each point
-class BDProbePointsHelper:
-    def __init__(self, config, finalize_callback, default_points=None):
-        self.printer = config.get_printer()
-        self.name = config.get_name()
-        self.finalize_callback = finalize_callback
-        self.probe_points = default_points
-        self.name = config.get_name()
-        self.gcode = self.printer.lookup_object('gcode')
-        # Read config settings
-        if default_points is None or config.get('points', None) is not None:
-            self.probe_points = config.getlists('points', seps=(',', '\n'),
-                                                parser=float, count=2)
-        def_move_z = config.getfloat('horizontal_move_z', 5.)
-        self.default_horizontal_move_z = def_move_z
-        self.speed = config.getfloat('speed', 50., above=0.)
-        self.use_offsets = True  # False
-        # Internal probing state
-        self.lift_speed = self.speed
-        self.probe_offsets = (0., 0., 0.)
-        self.results = []
-        self.manual_results = []
-        
-    def minimum_points(self, n):
-        if len(self.probe_points) < n:
-            raise self.printer.config_error(
-                "Need at least %d probe points for %s" % (n, self.name))
-
-    def update_probe_points(self, points, min_points):
-        self.probe_points = points
-        self.minimum_points(min_points)
-
-    def use_xy_offsets(self, use_offsets):
-        self.use_offsets = use_offsets
-
-    def get_lift_speed(self):
-        return self.lift_speed
-        
-    def _move(self, coord, speed):
-        self.printer.lookup_object('toolhead').manual_move(coord, speed)
-    def _raise_tool(self, is_first=False):
-        speed = self.lift_speed
-        if is_first:
-            # Use full speed to first probe position
-            speed = self.speed
-        self._move([None, None, self.horizontal_move_z], speed)
-    def _invoke_callback(self, results):
-        # Flush lookahead queue
-        toolhead = self.printer.lookup_object('toolhead')
-        toolhead.get_last_move_time()
-        # Invoke callback
-        res = self.finalize_callback(self.probe_offsets, results)
-        return res != "retry"
-    def _move_next(self, probe_num):
-        # Move to next XY probe point
-        nextpos = list(self.probe_points[probe_num])
-        if self.use_offsets:
-            nextpos[0] -= self.probe_offsets[0]
-            nextpos[1] -= self.probe_offsets[1]
-        self._move(nextpos, self.speed)
-
-    def fast_probe_oneline(self, direction):
-        probe = self.printer.lookup_object('probe', None)
-        toolhead = self.printer.lookup_object('toolhead')
-        oneline_points = []
-        start_point = []
-        if "backward" in direction:
-            start_point = list(self.probe_points[len(self.results_copy) - 1])
-        else:
-            start_point = list(self.probe_points[len(self.results)])
-        end_point = []
-        for point in self.probe_points:
-            if start_point[1] == point[1]:
-                oneline_points.append(point)
-        n_count = len(oneline_points)
-
-        if n_count < 1:
-            raise self.printer.config_error(
-                "Seems the mesh direction is not X, points count on x is %d"
-                % n_count)
-        if "backward" in direction:
-            oneline_points.reverse()
-        end_point = list(oneline_points[n_count - 1])
-        if self.use_offsets:
-            start_point[0] -= self.probe_offsets[0]
-            start_point[1] -= self.probe_offsets[1]
-            end_point[0] -= self.probe_offsets[0]
-            end_point[1] -= self.probe_offsets[1]
-        toolhead.manual_move(start_point, self.speed)
-        toolhead.wait_moves()
-        if n_count == 1:
-            toolhead.wait_moves()
-            pos = toolhead.get_position()
-            if self.use_offsets:
-                pos[0] -= self.probe_offsets[0]
-                pos[1] -= self.probe_offsets[1]
-            intd = probe.mcu_probe.BD_Sensor_Read(0)
-            pos[2] = pos[2] - intd
-            if "backward" in direction:
-                self.results_1.append(pos)
-                self.results_copy.pop()
-            else:
-                self.results.append(pos)
-            return
-        toolhead.manual_move(end_point, self.speed)
-        ####
-        toolhead._flush_lookahead()
-        curtime = toolhead.reactor.monotonic()
-        est_time = toolhead.mcu.estimated_print_time(curtime)
-        line_time = toolhead.print_time - est_time
-        start_time = est_time
-        x_index = 0
-        while (not toolhead.special_queuing_state
-               or toolhead.print_time >= est_time):
-            if not toolhead.can_pause:
-                break
-            est_time = toolhead.mcu.estimated_print_time(curtime)
-            if (est_time - start_time) >= x_index * line_time / (n_count - 1):
-                pos = toolhead.get_position()
-                pos[0] = oneline_points[x_index][0]
-                pos[1] = oneline_points[x_index][1]
-                if self.use_offsets:
-                    pos[0] -= self.probe_offsets[0]
-                    pos[1] -= self.probe_offsets[1]
-                intd = probe.mcu_probe.BD_Sensor_Read(0)
-                pos[2] = pos[2] - intd
-                if "backward" in direction:
-                    self.results_1.append(pos)
-                    self.results_copy.pop()
-                else:
-                    self.results.append(pos)
-                x_index += 1
-            curtime = toolhead.reactor.pause(curtime + 0.001)
-
-    def fast_probe(self, gcmd):
-        toolhead = self.printer.lookup_object('toolhead')
-        probe = self.printer.lookup_object('probe', None)
-        speed = self.lift_speed
-        if not self.results:
-            # Use full speed to first probe position
-            speed = self.speed
-        toolhead.manual_move([None, None, self.horizontal_move_z], speed)
-        self.results = []
-        while len(self.results) < len(self.probe_points):
-            self.fast_probe_oneline("forward")
-        self.results_copy = copy.copy(self.results)
-        self.results_1 = []
-        while len(self.results_1) < len(self.probe_points):
-            self.fast_probe_oneline("backward")
-        self.results_1.reverse()
-        # print("results_1_1:",self.results_1)
-        for index in range(len(self.results)):
-            self.results[index][2] = (self.results[index][2] +
-                                      self.results_1[index][2]) / 2 + \
-                                     probe.mcu_probe.endstop_bdsensor_offset
-            if index < 1000:
-                probe.gcode.respond_info("probe at %.3f,%.3f is z=%.6f"
-                                         % (self.results[index][0],
-                                            self.results[index][1],
-                                            self.results[index][2]))
-        res = self.finalize_callback(self.probe_offsets, self.results)
-        self.results = []
-        self.results_1 = []
-        if res != "retry":
-            return True
-
-    def start_probe(self, gcmd):
-        manual_probe.verify_no_manual_probe(self.printer)
-        # Lookup objects
-        probe = self.printer.lookup_object('probe', None)
-        method = gcmd.get('METHOD', 'automatic').lower()
-        self.results = []
-        def_move_z = self.default_horizontal_move_z
-        self.horizontal_move_z = gcmd.get_float('HORIZONTAL_MOVE_Z',
-                                                def_move_z)
-        if probe is None or method == 'manual':
-            # Manual probe
-            self.lift_speed = self.speed
-            self.probe_offsets = (0., 0., 0.)
-            self.manual_results = []
-            self._manual_probe_start()
-            return
-        # Perform automatic probing
-        self.lift_speed = probe.get_lift_speed(gcmd)
-        self.probe_offsets = probe.get_offsets()
-        if self.horizontal_move_z < self.probe_offsets[2]:
-            raise gcmd.error("horizontal_move_z can't be less than"
-                             " probe's z_offset")
-        probe.multi_probe_begin()
-        gcmd.respond_info("BDsensor:gcode %s" % gcmd.get_command())
-        if "BED_MESH_CALIBRATE" in gcmd.get_command():
-            try:
-                if probe.mcu_probe.no_stop_probe is not None:
-                    self.fast_probe(gcmd)
-                    probe.multi_probe_end()
-                    return
-            except AttributeError as e:
-                gcmd.respond_info("%s" % str(e))
-                raise gcmd.error("%s" % str(e))
-                # pass
-        probe_num = 0
-        while 1:
-            self._raise_tool(not probe_num)
-            if probe_num >= len(self.probe_points):
-                results = probe.pull_probed_results()
-                done = self._invoke_callback(results)
-                if done:
-                    break
-                # Caller wants a "retry" - restart probing
-                probe_num = 0
-            done = self._move_next(probe_num)
-            pos = probe.run_probe(gcmd)
-            probe_num += 1
-            #self.results.append(pos)
-        probe.end_probe_session()
-
-    def _manual_probe_start(self):
-        self._raise_tool(not self.manual_results)
-        if len(self.manual_results) >= len(self.probe_points):
-            done = self._invoke_callback(self.manual_results)
-            if done:
-                return
-            # Caller wants a "retry" - clear results and restart probing
-            self.manual_results = []
-        self._move_next(len(self.manual_results))
-        gcmd = self.gcode.create_gcode_command("", "", {})
-        manual_probe.ManualProbeHelper(self.printer, gcmd,
-                                           self._manual_probe_finalize)
-
-    def _manual_probe_finalize(self, kin_pos):
-        if kin_pos is None:
-            return
-        self.manual_results.append(kin_pos)
-        self._manual_probe_start()
 
 
 # BDsensor wrapper that enables probe specific features
@@ -1098,7 +931,7 @@ class BDsensorEndstopWrapper:
         if 'z' not in self.toolhead.get_status(curtime)['homed_axes']:
             raise self.printer.command_error("make sure [force_move]"
                                             " enable_force_move: true # in the printer.cfg")
-        self.toolhead.dwell(0.1)
+        self.toolhead.dwell(0.2)
         gcmd.respond_info("Please Wait... ")
         z_pos = 0
         ncount = 0
@@ -1112,7 +945,7 @@ class BDsensorEndstopWrapper:
             # self.gcode.run_script_from_command("G91")
             # self.gcode.run_script_from_command("G1 Z+0.1 F1500")
             # self.gcode.run_script_from_command("G90")
-            self.toolhead.manual_move([None, None, z_pos], 100)
+            self.toolhead.manual_move([None, None, z_pos], 2)
             self.toolhead.wait_moves()
             self.toolhead.dwell(0.2)
             ncount = ncount + 1
@@ -1121,6 +954,7 @@ class BDsensorEndstopWrapper:
                 self.toolhead.dwell(1)
                 self.I2C_BD_send(CMD_DISTANCE_MODE)
                 self.I2C_BD_send(CMD_DISTANCE_MODE)
+                self.toolhead.dwell(1)
                 self.BD_read_calibration(gcmd)
                 gcmd.respond_info("Calibrate Finished!")
                 #gcmd.respond_info("You can send command "
@@ -1142,7 +976,7 @@ class BDsensorEndstopWrapper:
         ncount1 = 0
         while 1:
             intd = self.I2C_BD_send(CMD_READ_DATA, 1)
-            gcmd.respond_info("%d"%intd)
+            gcmd.respond_info("%d at %.1fmm"%(intd,ncount1/10.0))
             if ncount1 <= 3 and intd > 500:
                 gcmd.respond_raw("BDSensor mounted too high!"
                                  "0.4mm to 2.4mm from BED at"
@@ -1222,6 +1056,10 @@ class BDsensorEndstopWrapper:
         if cmd_bd is not None:
             self.collision_calibrating = cmd_bd
             return
+        cmd_bd = gcmd.get_float('POSITION_ENDSTOP', None)
+        if cmd_bd is not None:
+            self.position_endstop = cmd_bd
+            return
 
     def BD_real_time(self, bd_height):
         if bd_height >= 3.0:
@@ -1283,7 +1121,12 @@ class BDsensorEndstopWrapper:
         elif cmd_bd == -2:  # gcode M102 S-2 read distance data
             self.bd_distance(gcmd)
         elif cmd_bd == -7:
-            self.I2C_BD_send(CMD_DISTANCE_RAWDATA_TYPE)
+            self.I2C_BD_send(CMD_DISTANCE_RAWDATA_TYPE) 
+            strd = "Raw data:" + str(self.I2C_BD_send(CMD_READ_DATA, 1))
+            self.I2C_BD_send(CMD_DISTANCE_MODE)
+            self.bd_value = self.BD_Sensor_Read(1)
+            strd = strd + ",  Then we can calculate the distance by comparing to the calibration data:"+str(self.bd_value) + "mm"
+            gcmd.respond_raw(strd) 
             return
         elif cmd_bd == -8:
             self.I2C_BD_send(CMD_REBOOT_SENSOR)
@@ -1444,7 +1287,7 @@ class BDsensorEndstopWrapper:
         pos_old = homepos[2]
         while 1:
             homepos[2] += up_steps
-            self.toolhead.manual_move([None, None, homepos[2]], 100)
+            self.toolhead.manual_move([None, None, homepos[2]], 2)
             self.toolhead.wait_moves()
             time.sleep(0.05)
             raw_d = self.I2C_BD_send(CMD_READ_DATA, 1)
@@ -1453,12 +1296,12 @@ class BDsensorEndstopWrapper:
                     break
                 pos_old_1 = homepos[2]
                 homepos[2] -= 0.1 # (up_steps*1.5)
-                self.toolhead.manual_move([None, None, homepos[2]], 100)
+                self.toolhead.manual_move([None, None, homepos[2]], 2)
                 self.toolhead.wait_moves()
                 intr = raw_d
                 while 1:
                     homepos[2] += second_steps
-                    self.toolhead.manual_move([None, None, homepos[2]], 100)
+                    self.toolhead.manual_move([None, None, homepos[2]], 1)
                     self.toolhead.wait_moves()
                     time.sleep(0.05)
                     raw_d = self.I2C_BD_send(CMD_READ_DATA, 1)
@@ -1472,8 +1315,8 @@ class BDsensorEndstopWrapper:
                                 temp, target = heaters.get_temp(self.printer.get_reactor().monotonic())
                             except Exception as e:
                                 pass
-                            self.gcode.respond_info("Collision: %.4f mm, Bed: %.1fC"
-                                                % (raw_d*0.004,temp))
+                            self.gcode.respond_info("Raw data:%d at 0 mm, BDsensor to bed: %.4f mm, Bed: %.1fC"
+                                                % (raw_d,raw_d*0.004,temp))
                         return homepos[2]-pos_old,raw_d-intr_old
                         break
                     intr = raw_d
@@ -1489,7 +1332,7 @@ class BDsensorEndstopWrapper:
         self.toolhead.set_position(homepos)
         while 1:
             homepos[2] -= down_steps
-            self.toolhead.manual_move([None, None, homepos[2]], 100)
+            self.toolhead.manual_move([None, None, homepos[2]], 2)
             self.toolhead.wait_moves()
             time.sleep(0.05)
             raw_d = self.I2C_BD_send(CMD_READ_DATA, 1)
