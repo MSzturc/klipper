@@ -272,7 +272,6 @@ class TMC5160CurrentHelper:
                                       above=0., maxval=MAX_CURRENT)
         hold_current = config.getfloat('hold_current', MAX_CURRENT,
                                        above=0., maxval=MAX_CURRENT)
-        self.cs = config.getint('tmc_cs', 31, 0)
         self.req_hold_current = hold_current
         self.sense_resistor = config.getfloat('sense_resistor', 0.075, above=0.)
         gscaler, irun, ihold = self._calc_current(run_current, hold_current)
@@ -289,8 +288,9 @@ class TMC5160CurrentHelper:
             globalscaler = 0
         return globalscaler
     def _calc_current_bits(self, current):
-        cs = self.cs
-        return max(16, min(31, cs))
+        cs = int(100 * (current * math.sqrt(2)) * self.sense_resistor) - int(
+            1 - 2 * (current * math.sqrt(2)))
+        return max(0, min(31, cs))
     def _calc_current(self, run_current, hold_current):
         gscaler = self._calc_globalscaler(run_current)
         irun = self._calc_current_bits(run_current)
