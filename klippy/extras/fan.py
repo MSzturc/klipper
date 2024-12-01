@@ -10,11 +10,31 @@ class Fan:
         self.printer = config.get_printer()
         self.last_fan_value = self.last_req_value = 0.
         # Read config
+        self.min_power = config.getfloat("min_power", default=None, minval=0., maxval=1.)
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
         self.kick_start_time = config.getfloat('kick_start_time', 0.1,
                                                minval=0.)
-        self.off_below = config.getfloat('off_below', default=0.,
+        self.off_below = config.getfloat('off_below', default=None,
                                          minval=0., maxval=1.)
+        
+        if self.min_power is not None and self.off_below is not None:
+            raise config.error(
+                "min_power and off_below are both set. Remove one!"
+            )
+
+        if self.min_power is None:
+            if self.off_below is None:
+                # both unset, set to 0.0
+                self.min_power = 0.0
+            else:
+                self.min_power = self.off_below
+
+        if self.min_power > self.max_power:
+            raise config.error(
+                "min_power=%f can't be larger than max_power=%f"
+                % (self.min_power, self.max_power)
+            )
+
         cycle_time = config.getfloat('cycle_time', 0.010, above=0.)
         hardware_pwm = config.getboolean('hardware_pwm', False)
         shutdown_speed = config.getfloat(
@@ -47,11 +67,16 @@ class Fan:
     def get_mcu(self):
         return self.mcu_fan.get_mcu()
     def _apply_speed(self, print_time, value):
-        if value < self.off_below:
-            value = 0.
-        value = max(0., min(self.max_power, value * self.max_power))
         if value == self.last_fan_value:
             return "discard", 0.
+        if value > 0:
+            # Scale value between min_power and max_power
+            pwm_value = (
+                value * (self.max_power - self.min_power) + self.min_power
+            )
+            pwm_value = max(self.min_power, min(self.max_power, pwm_value))
+        else:
+            pwm_value = 0
         if self.enable_pin:
             if value > 0 and self.last_fan_value == 0:
                 self.enable_pin.set_digital(print_time, 1)
@@ -65,7 +90,7 @@ class Fan:
             self.mcu_fan.set_pwm(print_time, self.max_power)
             return "delay", self.kick_start_time
         self.last_fan_value = self.last_req_value = value
-        self.mcu_fan.set_pwm(print_time, value)
+        self.mcu_fan.set_pwm(print_time, pwm_value)
     def set_speed(self, value, print_time=None):
         self.gcrq.send_async_request(value, print_time)
     def set_speed_from_command(self, value):
