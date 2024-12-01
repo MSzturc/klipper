@@ -2,3 +2,4 @@ This is a modified klipper version I use for my T100 and T250 printers. It's bas
 
 It contains the following additions:
 - Added Support for BDSensor - https://github.com/markniu/Bed_Distance_sensor
+- Fixed TMC5160 Driver - https://github.com/Klipper3d/klipper/pull/6644
