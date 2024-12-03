@@ -135,7 +135,7 @@ class BDPrinterProbe:
         self.reactor = self.printer.get_reactor()
         self.bd_sample_timer = self.reactor.register_timer(
             self.scan_sample_event)
-
+        
     def _probe_state_error(self):
         raise self.printer.command_error(
                 "Internal probe error - start/end probe session mismatch")
@@ -156,7 +156,7 @@ class BDPrinterProbe:
         self.multi_probe_pending = True
         self.mcu_probe.results = []
         return self
-
+        
     def pull_probed_results(self):
         toolhead = self.printer.lookup_object("toolhead")
         toolhead.get_last_move_time()
@@ -177,7 +177,7 @@ class BDPrinterProbe:
         self.mcu_probe.results = []    
         self.multi_probe_pending = False
         self.mcu_probe.multi_probe_end()
-
+        
     def get_probe_params(self, gcmd=None):
         if gcmd is None:
             gcmd = self.dummy_gcode_cmd
@@ -229,7 +229,7 @@ class BDPrinterProbe:
                          and rail.homing_retract_dist == 0):
                     rail.homing_speed = self.homing_speed_tmp
             self.multi_probe_end()
-
+            
 
     def _handle_command_error(self):
         try:
@@ -315,7 +315,7 @@ class BDPrinterProbe:
         # even number of samples
         return self._calc_mean(z_sorted[middle - 1:middle + 1])
 
-
+      
     def _lookup_toolhead_pos(self, pos_time):
         toolhead = self.printer.lookup_object('toolhead')
         kin = toolhead.get_kinematics()
@@ -323,7 +323,7 @@ class BDPrinterProbe:
                                       s.get_past_mcu_position(pos_time))
                     for s in kin.get_steppers()}
         return kin.calc_position(kin_spos)
-
+    
     def scan_sample_event(self, eventtime):
         toolhead = self.printer.lookup_object("toolhead")
         while self._probe_times:
@@ -342,9 +342,9 @@ class BDPrinterProbe:
                     break
                 toolhead.reactor.pause(systime + 0.002)
             self._probe_times.pop(0)
-
+            
         return eventtime + 0.005
-
+            
 
     def _scan_lookahead_cb(self, printtime):       
         self._probe_times.append(printtime)
@@ -472,7 +472,7 @@ class BDPrinterProbe:
                              sample_count, sample_retract_dist,
                              speed, lift_speed))
         # Probe bed sample_count times
-
+        
         # toolhead.manual_move([None, None, pos[2]], speed)
         # toolhead.wait_moves()
         fo_params = dict(gcmd.get_command_parameters())
@@ -592,7 +592,7 @@ class BDsensorEndstopWrapper:
         self.QGL_Tilt_Probe = config.getint('QGL_Tilt_Probe', 1)
         self.switch_mode_sample_time = config.getint('SWITCH_MODE_SAMPLE_TIME', 0.006)
         self.speed = config.getfloat('speed', 3.0, above=0.)
-
+        
         gcode_macro = self.printer.load_object(config,
                                                'gcode_macro')
         self.activate_gcode = \
@@ -694,7 +694,7 @@ class BDsensorEndstopWrapper:
         self.reactor = self.printer.get_reactor()
         self.bd_update_timer = self.reactor.register_timer(
             self.bd_update_event)
-
+        
         self.status_dis = None
         # try:
         # self.status_dis=self.printer.lookup_object('display_status')
@@ -820,7 +820,7 @@ class BDsensorEndstopWrapper:
                 self.bd_set_cur_z(z,1)   
                 break
         self.I2C_BD_send(CMD_DISTANCE_MODE)
-
+        
     def bd_update_event(self, eventtime):
         z=self.gcode_move.last_position[2] - self.gcode_move.base_position[2]
         if self.homing == 1:
@@ -923,7 +923,7 @@ class BDsensorEndstopWrapper:
                 raise self.printer.command_error("Unable to communicate with bdsensor,%d"%raw_d)
             raise self.printer.command_error("BDsensor is too far from the bed:%d"%raw_d)
         self.I2C_BD_send(CMD_DISTANCE_MODE)
-
+        
         self.I2C_BD_send(CMD_START_CALIBRATE)
         self.I2C_BD_send(CMD_START_CALIBRATE)
         self.gcode.run_script_from_command("SET_KINEMATIC_POSITION Z=0")
@@ -1067,7 +1067,7 @@ class BDsensorEndstopWrapper:
         elif bd_height < 0.0:
             bd_height = 0
         self.gcode.respond_info("Real time leveling height:%.2f ( %.2f - z_offset:%.2f ) "%(bd_height-self.z_offset,bd_height,self.z_offset))
-
+        
         if bd_height == 0:
             self.adjust_range = 0
         else:
@@ -1102,7 +1102,7 @@ class BDsensorEndstopWrapper:
             self.reactor.update_timer(self.bd_update_timer, self.reactor.NEVER)
         else:
             self.reactor.update_timer(self.bd_update_timer, self.reactor.NOW)
-
+        
     def process_M102(self, gcmd):
         self.process_m102 = 1
         cmd_bd = 0
@@ -1343,7 +1343,7 @@ class BDsensorEndstopWrapper:
             intr = raw_d
 
 
-
+    
 
     def adjust_probe(self):
         self.toolhead = self.printer.lookup_object('toolhead')
@@ -1352,13 +1352,13 @@ class BDsensorEndstopWrapper:
         self.I2C_BD_send(CMD_DISTANCE_RAWDATA_TYPE)
         adj_z,adj_raw = self.adjust_probe_up(0.1,0,1)      
         #if adj_z <= 0.15: # and adj_raw >= 6:
-
+        
         self.adjust_probe_down(0.1)
         adj_z,adj_raw = self.adjust_probe_up(0.05,0.01,0) 
-
+        
         self.adjust_probe_down(0.05)
         adj_z,adj_raw = self.adjust_probe_up(0.05,0.005,1) 
-
+        
         #if adj_z <= 0.1: # and adj_raw >= 6:
         #    self.gcode.respond_info("re-adjusting")
         #    self.adjust_probe_down(0.1)
