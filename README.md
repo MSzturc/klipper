@@ -9,3 +9,4 @@ It contains the following additions:
 - Allow Plugins to be installed into klipper without marking klipper installation as 'dirty'
 - Added RELOAD_GCODE_MACROS to reload config withour restaring klipper - https://github.com/KalicoCrew/kalico/pull/305
 - Improved Sensorless Homing implementation - https://github.com/KalicoCrew/kalico/pull/90 / https://github.com/KalicoCrew/kalico/pull/65
+- Added optional MCU support - https://github.com/KalicoCrew/kalico/pull/339
