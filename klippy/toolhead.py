@@ -290,6 +290,16 @@ class ToolHead:
                    "manual_probe", "tuning_tower"]
         for module_name in modules:
             self.printer.load_object(config, module_name)
+    def get_active_rails_for_axis(self, axis):
+        # axis is 'x,y,z'
+        active_rails = []
+        rails = self.kin.rails
+        for rail in rails:
+            for stepper in rail.get_steppers():
+                if stepper.is_active_axis(axis):
+                    active_rails.append(rail)
+                    break
+        return active_rails
     # Print time and flush tracking
     def _advance_flush_time(self, flush_time):
         flush_time = max(flush_time, self.last_flush_time)
