@@ -278,7 +278,7 @@ class ControlCurve:
             else:
                 above = config_temp
                 break
-        self.controlled_fan.set_speed(
+        self.controlled_fan.set_tf_speed(
             read_time, self.interpolate(below, above, temp)
         )
 
