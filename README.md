@@ -10,3 +10,6 @@ It contains the following additions:
 - Added RELOAD_GCODE_MACROS to reload config withour restaring klipper - https://github.com/KalicoCrew/kalico/pull/305
 - Improved Sensorless Homing implementation - https://github.com/KalicoCrew/kalico/pull/90 / https://github.com/KalicoCrew/kalico/pull/65
 - Added optional MCU support - https://github.com/KalicoCrew/kalico/pull/339
+- Enable 'force move' by default - https://github.com/KalicoCrew/kalico/pull/135
+- Enable 'exclude_object' by default https://github.com/KalicoCrew/kalico/pull/306
+- Enable 'respond' by default https://github.com/KalicoCrew/kalico/pull/306
