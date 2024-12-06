@@ -4,3 +4,5 @@ out
 .config
 .config.old
 klippy/.version
+klippy/plugins/*
+!klippy/plugins/__init__.py

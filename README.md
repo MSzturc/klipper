@@ -6,3 +6,4 @@ It contains the following additions:
 - Added Normalized Fan PWM power - https://github.com/DangerKlippers/danger-klipper/pull/44
 - Added Curve Fan Control - https://github.com/DangerKlippers/danger-klipper/pull/193/files
 - Rotate log file at every Restart - https://github.com/KalicoCrew/kalico/pull/181
+- Allow Plugins to be installed into klipper without marking klipper installation as 'dirty'
