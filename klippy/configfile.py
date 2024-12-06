@@ -249,8 +249,12 @@ class ConfigAutoSave:
         self.status_save_pending = {}
         self.save_config_pending = False
         gcode = self.printer.lookup_object('gcode')
-        gcode.register_command("SAVE_CONFIG", self.cmd_SAVE_CONFIG,
-                               desc=self.cmd_SAVE_CONFIG_help)
+        if "SAVE_CONFIG" not in gcode.ready_gcode_handlers:
+            gcode.register_command(
+                "SAVE_CONFIG",
+                self.cmd_SAVE_CONFIG,
+                desc=self.cmd_SAVE_CONFIG_help,
+            )
     def _find_autosave_data(self, data):
         regular_data = data
         autosave_data = ""
