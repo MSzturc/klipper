@@ -5,3 +5,4 @@ It contains the following additions:
 - Fixed TMC5160 Driver - https://github.com/Klipper3d/klipper/pull/6644
 - Added Normalized Fan PWM power - https://github.com/DangerKlippers/danger-klipper/pull/44
 - Added Curve Fan Control - https://github.com/DangerKlippers/danger-klipper/pull/193/files
+- Rotate log file at every Restart - https://github.com/KalicoCrew/kalico/pull/181
