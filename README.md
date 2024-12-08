@@ -14,3 +14,4 @@ It contains the following additions:
 - Enable 'exclude_object' by default https://github.com/KalicoCrew/kalico/pull/306
 - Enable 'respond' by default https://github.com/KalicoCrew/kalico/pull/306
 - Allow config includes to use subfolder globs - https://github.com/Klipper3d/klipper/pull/6375
+- Auto Backup printer.cfg with all includes - https://github.com/KalicoCrew/kalico/pull/153
