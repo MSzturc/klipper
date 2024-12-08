@@ -13,3 +13,4 @@ It contains the following additions:
 - Enable 'force move' by default - https://github.com/KalicoCrew/kalico/pull/135
 - Enable 'exclude_object' by default https://github.com/KalicoCrew/kalico/pull/306
 - Enable 'respond' by default https://github.com/KalicoCrew/kalico/pull/306
+- Allow config includes to use subfolder globs - https://github.com/Klipper3d/klipper/pull/6375
