@@ -608,6 +608,8 @@ class MCU:
         self._mcu_tick_avg = 0.
         self._mcu_tick_stddev = 0.
         self._mcu_tick_awake = 0.
+        # cpu
+        self.cpu = config.get("cpu", False)
         # noncritical mcus
         self.is_non_critical = config.getboolean("is_non_critical", False)
         if self.is_non_critical and self.get_name() == "mcu":

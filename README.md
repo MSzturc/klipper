@@ -16,3 +16,4 @@ It contains the following additions:
 - Allow config includes to use subfolder globs - https://github.com/Klipper3d/klipper/pull/6375
 - Auto Backup printer.cfg with all includes - https://github.com/KalicoCrew/kalico/pull/153
 - Execute a linux command/script from within Klipper - https://github.com/Klipper3d/klipper/pull/2173
+- Be able to define a cpu for every MCU
