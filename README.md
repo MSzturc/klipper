@@ -18,3 +18,4 @@ It contains the following additions:
 - Execute a linux command/script from within Klipper - https://github.com/Klipper3d/klipper/pull/2173
 - Be able to define a cpu for every MCU
 - Sensorless retract dist fix - https://github.com/KalicoCrew/kalico/pull/109
+- Sensorless rehome check traveled distance - https://github.com/KalicoCrew/kalico/pull/110

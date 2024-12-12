@@ -168,6 +168,22 @@ class HomingMove:
             if sp.start_pos == sp.trig_pos:
                 return sp.endstop_name
         return None
+    def moved_less_than_dist(self, min_dist, homing_axes):
+        homing_axis_distances = [
+            dist
+            for i, dist in enumerate(self.distance_elapsed)
+            if i in homing_axes
+        ]
+        distance_tolerance = .75
+        if any(
+            [
+                abs(dist) < min_dist
+                and min_dist - abs(dist) >= distance_tolerance
+                for dist in homing_axis_distances
+            ]
+        ):
+            return True
+        return False
 
 # State tracking of homing requests
 class Homing:
@@ -234,16 +250,9 @@ class Homing:
         hmove = HomingMove(self.printer, endstops)
         self._set_current_homing(homing_axes)
         hmove.homing_move(homepos, hi.speed)
-        homing_axis_distances = [
-            dist
-            for i, dist in enumerate(hmove.distance_elapsed)
-            if i in homing_axes
-        ]
         needs_rehome = False
         retract_dist = hi.retract_dist
-        if any(
-            [abs(dist) < hi.min_home_dist for dist in homing_axis_distances]
-        ):
+        if hmove.moved_less_than_dist(hi.min_home_dist, homing_axes):
             needs_rehome = True
             retract_dist = hi.min_home_dist
         # Perform second home
@@ -276,6 +285,16 @@ class Homing:
                     raise self.printer.command_error(
                         "Endstop %s still triggered after retract"
                         % (hmove.check_no_movement(),)
+                    )
+                if (
+                    hi.use_sensorless_homing
+                    and needs_rehome
+                    and hmove.moved_less_than_dist(
+                        hi.min_home_dist, homing_axes
+                    )
+                ):
+                    raise self.printer.command_error(
+                        "Early homing trigger on second home!"
                     )
                 if hi.retract_dist:
                     # Retract (again)
