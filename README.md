@@ -25,3 +25,4 @@ It contains the following additions:
 - Sensorless return to run current
 - Sensorless: revert current when raising errors
 - Sensorless: Reset endstop states before first home
+- Stepstick Lookup Table - https://github.com/KalicoCrew/kalico/pull/340

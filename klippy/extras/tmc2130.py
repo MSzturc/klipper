@@ -116,12 +116,12 @@ FieldFormatters = {
 # TMC stepper current config helper
 ######################################################################
 
-MAX_CURRENT = 2.000
-
 class TMC2130CurrentHelper(tmc.BaseTMCCurrentHelper):
+    DEFAULT_SENSE_RESISTOR = 0.110
+    DEFAULT_MAX_CURRENT = 2.000
+
     def __init__(self, config, mcu_tmc):
-        super().__init__(config, mcu_tmc, MAX_CURRENT)
-        self.sense_resistor = config.getfloat('sense_resistor', 0.110, above=0.)
+        super().__init__(config, mcu_tmc)
         vsense, irun, ihold = self._calc_current(
             self.req_run_current, self.req_hold_current
         )
@@ -164,7 +164,6 @@ class TMC2130CurrentHelper(tmc.BaseTMCCurrentHelper):
             run_current,
             hold_current,
             self.req_hold_current,
-            MAX_CURRENT,
             self.req_home_current,
         )
     def apply_current(self, print_time):
