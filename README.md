@@ -26,3 +26,4 @@ It contains the following additions:
 - Sensorless: revert current when raising errors
 - Sensorless: Reset endstop states before first home
 - Stepstick Lookup Table - https://github.com/KalicoCrew/kalico/pull/340
+- Add function in configfile to warn - https://github.com/KalicoCrew/kalico/pull/141

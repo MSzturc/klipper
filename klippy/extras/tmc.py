@@ -679,7 +679,7 @@ class BaseTMCCurrentHelper:
             and sense_resistor_from_driver is None
         ):
             self.sense_resistor = self.DEFAULT_SENSE_RESISTOR
-            self.config_file.warning(
+            self.config_file.warn(
                 "config",
                 f"""Neither 'stepper_driver_type' or 'sense_resistor' is defined for [{self.name}].
                 Using default value of {self.sense_resistor} ohm sense resistor.

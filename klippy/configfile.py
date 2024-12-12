@@ -576,6 +576,18 @@ class PrinterConfig:
         res = {'type': 'runtime_warning', 'message': msg}
         self.runtime_warnings.append(res)
         self.status_warnings = self.runtime_warnings + self.deprecate_warnings
+    def warn(self, type, msg, section=None, option=None, value=None):
+        res = {
+            "type": type,
+            "message": msg,
+        }
+        if section is not None:
+            res["section"] = section
+        if option is not None:
+            res["option"] = option
+        if value is not None:
+            res["value"] = value
+        self.status_warnings.append(res)
     def deprecate(self, section, option, value=None, msg=None):
         key = (section, option, value)
         if key in self.deprecated and self.deprecated[key] == msg:
@@ -583,14 +595,8 @@ class PrinterConfig:
         self.deprecated[key] = msg
         self.deprecate_warnings = []
         for (section, option, value), msg in self.deprecated.items():
-            if value is None:
-                res = {'type': 'deprecated_option'}
-            else:
-                res = {'type': 'deprecated_value', 'value': value}
-            res['message'] = msg
-            res['section'] = section
-            res['option'] = option
-            self.deprecate_warnings.append(res)
+            _type = "deprecated_value"
+            self.warn(_type, msg, section, option, value)
         self.status_warnings = self.runtime_warnings + self.deprecate_warnings
     # Status reporting
     def _build_status_config(self, config):
