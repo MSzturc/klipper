@@ -19,3 +19,4 @@ It contains the following additions:
 - Be able to define a cpu for every MCU
 - Sensorless retract dist fix - https://github.com/KalicoCrew/kalico/pull/109
 - Sensorless rehome check traveled distance - https://github.com/KalicoCrew/kalico/pull/110
+- Allow multiple current helpers per rail - https://github.com/KalicoCrew/kalico/pull/117
