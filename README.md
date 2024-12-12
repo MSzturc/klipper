@@ -24,3 +24,4 @@ It contains the following additions:
 - Sensorless: dwell once for all rails
 - Sensorless return to run current
 - Sensorless: revert current when raising errors
+- Sensorless: Reset endstop states before first home

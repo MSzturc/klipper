@@ -227,6 +227,10 @@ class Homing:
                     dwell_time = max(dwell_time, current_dwell_time)
         if dwell_time:
             self.toolhead.dwell(dwell_time)
+    def _reset_endstop_states(self, endstops):
+        print_time = self.toolhead.get_last_move_time()
+        for endstop in endstops:
+            endstop[0].query_endstop(print_time)
     def home_rails(self, rails, forcepos, movepos):
         # Notify of upcoming homing operation
         self.printer.send_event("homing:home_rails_begin", self, rails)
@@ -240,6 +244,7 @@ class Homing:
         hi = rails[0].get_homing_info()
         hmove = HomingMove(self.printer, endstops)
         self._set_current_homing(homing_axes, pre_homing=True)
+        self._reset_endstop_states(endstops)
         hmove.homing_move(homepos, hi.speed)
         needs_rehome = False
         retract_dist = hi.retract_dist
@@ -265,11 +270,7 @@ class Homing:
                     rp - ad * retract_r for rp, ad in zip(retractpos, axes_d)
                 ]
                 self.toolhead.set_position(startpos)
-                print_time = self.toolhead.get_last_move_time()
-                for endstop in endstops:
-                    # re-querying a tmc endstop seems to reset the state
-                    # otherwise it triggers almost immediately upon second home
-                    endstop[0].query_endstop(print_time)
+                self._reset_endstop_states(endstops)
                 hmove = HomingMove(self.printer, endstops)
                 hmove.homing_move(homepos, hi.second_homing_speed)
                 try:
