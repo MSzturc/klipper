@@ -21,3 +21,4 @@ It contains the following additions:
 - Sensorless rehome check traveled distance - https://github.com/KalicoCrew/kalico/pull/110
 - Allow multiple current helpers per rail - https://github.com/KalicoCrew/kalico/pull/117
 - Sensorless not returning to run_current after homing - https://github.com/KalicoCrew/kalico/pull/236
+- Sensorless: dwell once for all rails
