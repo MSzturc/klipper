@@ -28,3 +28,4 @@ It contains the following additions:
 - Stepstick Lookup Table - https://github.com/KalicoCrew/kalico/pull/340
 - Add function in configfile to warn - https://github.com/KalicoCrew/kalico/pull/141
 - Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
+- Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448

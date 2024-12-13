@@ -15,6 +15,37 @@ error = configparser.Error
 class sentinel:
     pass
 
+class SectionInterpolation(configparser.Interpolation):
+    """
+    variable interpolation replacing ${[section.]option}
+    """
+
+    _KEYCRE = re.compile(
+        r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}"
+    )
+
+    def __init__(self, access_tracking):
+        self.access_tracking = access_tracking
+
+    def before_get(self, parser, section, option, value, defaults):
+        depth = configparser.MAX_INTERPOLATION_DEPTH
+        while depth:
+            depth -= 1
+
+            match = self._KEYCRE.search(value)
+            if not match:
+                break
+
+            sect = match.group("section") or section
+            opt = match.group("option")
+
+            const = parser.get(sect, opt)
+            self.access_tracking.setdefault((sect, opt), const)
+
+            value = value[: match.start()] + const + value[match.end() :]
+
+        return value
+
 class ConfigWrapper:
     error = configparser.Error
     def __init__(self, printer, fileconfig, access_tracking, section):
@@ -174,11 +205,12 @@ class ConfigFileReader:
         else:
             fileconfig.readfp(sbuffer, filename)
     def _create_fileconfig(self):
-        if sys.version_info.major >= 3:
-            fileconfig = configparser.RawConfigParser(
-                strict=False, inline_comment_prefixes=(';', '#'))
-        else:
-            fileconfig = configparser.RawConfigParser()
+        access_tracking = {}
+        fileconfig = configparser.RawConfigParser(
+            strict=False,
+            inline_comment_prefixes=(";", "#"),
+            interpolation=SectionInterpolation(access_tracking),
+        )
         return fileconfig
     def build_fileconfig(self, data, filename):
         fileconfig = self._create_fileconfig()
@@ -512,12 +544,12 @@ class ConfigValidate:
         # Validate that there are no undefined parameters in the config file
         for section_name in fileconfig.sections():
             section = section_name.lower()
-            if section not in valid_sections:
+            if section not in valid_sections and section != 'constants':
                 raise error("Section '%s' is not a valid config section"
                             % (section,))
             for option in fileconfig.options(section_name):
                 option = option.lower()
-                if (section, option) not in access_tracking:
+                if (section, option) not in access_tracking and section != 'constants':
                     raise error("Option '%s' is not valid in section '%s'"
                                 % (option, section))
         # Setup get_status()
