@@ -27,3 +27,4 @@ It contains the following additions:
 - Sensorless: Reset endstop states before first home
 - Stepstick Lookup Table - https://github.com/KalicoCrew/kalico/pull/340
 - Add function in configfile to warn - https://github.com/KalicoCrew/kalico/pull/141
+- Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
