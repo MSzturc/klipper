@@ -29,3 +29,4 @@ It contains the following additions:
 - Add function in configfile to warn - https://github.com/KalicoCrew/kalico/pull/141
 - Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
 - Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448
+- bugfix Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486

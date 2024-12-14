@@ -263,12 +263,14 @@ class Homing:
             retractpos = [hp - ad * retract_r
                           for hp, ad in zip(homepos, axes_d)]
             self.toolhead.move(retractpos, hi.retract_speed)
+            retract_times = 1
             if not hi.use_sensorless_homing or needs_rehome:
                 self.toolhead.dwell(0.5)
                 # Home again
                 startpos = [
                     rp - ad * retract_r for rp, ad in zip(retractpos, axes_d)
                 ]
+                retract_times = retract_times + 1
                 self.toolhead.set_position(startpos)
                 self._reset_endstop_states(endstops)
                 hmove = HomingMove(self.printer, endstops)
@@ -297,10 +299,11 @@ class Homing:
                     homepos = self._fill_coord(movepos)
                     axes_d = [hp - sp for hp, sp in zip(homepos, startpos)]
                     move_d = math.sqrt(sum([d * d for d in axes_d[:3]]))
-                    retract_r = min(1.0, hi.retract_dist / move_d)
+                    retract_r = min(1.0, hi.retract_dist * retract_times / move_d)
                     retractpos = [
                         hp - ad * retract_r for hp, ad in zip(homepos, axes_d)
                     ]
+                    retractpos[2] -= hi.retract_dist * retract_times
                     self.toolhead.move(retractpos, hi.retract_speed)
         self._set_current_homing(homing_axes, pre_homing=False)
         # Signal home operation complete
