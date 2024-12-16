@@ -374,7 +374,7 @@ def main():
         logging.info("Restarting printer")
 
         # Check if restart_hook.sh exists and execute it
-        script_path = os.path.expanduser("~/printer_data/config/scripts/restart_hook.sh")
+        script_path = os.path.expanduser("~/printer_data/config/scripts/before-restart-klipper.sh")
         if os.path.isfile(script_path):  # Check if the script exists
             try:
                 logging.info("Executing restart_hook.sh")
