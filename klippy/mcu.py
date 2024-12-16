@@ -1048,6 +1048,7 @@ class MCU:
         self._reactor.pause(self._reactor.monotonic() + 2.)
         chelper.run_hub_ctrl(1)
     def _firmware_restart(self, force=False):
+        logging.info("klippy:firmware_restart")
         if (
             self._is_mcu_bridge and not force
         ) or self.non_critical_disconnected:
