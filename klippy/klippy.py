@@ -373,18 +373,39 @@ def main():
         main_reactor = printer = None
         logging.info("Restarting printer")
 
-        # Check if restart_hook.sh exists and execute it
-        script_path = os.path.expanduser("~/printer_data/config/scripts/before-restart-klipper.sh")
+        # Log current user and home directory
+        user_home = os.path.expanduser("~")
+        logging.info(f"User home directory: {user_home}")
+        
+        # Path to the restart script
+        script_path = os.path.join(user_home, "printer_data/config/scripts/before-restart-klipper.sh")
+
+        # Check if script exists and execute it
         if os.path.isfile(script_path):  # Check if the script exists
             try:
-                logging.info("Executing restart_hook.sh")
-                subprocess.run([script_path], check=True)
-                logging.info("restart_hook.sh executed successfully")
+                logging.info(f"Executing {script_path}")
+                # Run subprocess and capture output
+                result = subprocess.run(
+                    [script_path],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,  # Capture output as text
+                    timeout=30  # Timeout to prevent infinite hanging
+                )
+                logging.info(f"{script_path} executed successfully with output:\n{result.stdout}")
+                if result.stderr:
+                    logging.warning(f"{script_path} returned errors:\n{result.stderr}")
+            except subprocess.TimeoutExpired:
+                logging.error(f"{script_path} timed out")
+                break
             except subprocess.CalledProcessError as e:
-                logging.error(f"restart_hook.sh failed with return code {e.returncode}")
+                logging.error(f"{script_path} failed with return code {e.returncode}")
+                logging.error(f"Error output:\n{e.stderr}")
                 break
         else:
-            logging.info("restart_hook.sh not found. Skipping script execution.")
+            logging.info(f"{script_path} not found. Skipping script execution.")
+
 
         start_args['start_reason'] = res
         if options.rotate_log_at_restart and bglogger is not None:
