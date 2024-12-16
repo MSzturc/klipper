@@ -4,7 +4,7 @@
 # Copyright (C) 2016-2024  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import sys, os, gc, optparse, logging, time, collections, importlib
+import sys, os, gc, optparse, logging, time, collections, importlib, subprocess
 import util, reactor, queuelogger, msgproto
 import gcode, configfile, pins, mcu, toolhead, webhooks
 
@@ -372,6 +372,20 @@ def main():
         main_reactor.finalize()
         main_reactor = printer = None
         logging.info("Restarting printer")
+
+        # Check if restart_hook.sh exists and execute it
+        script_path = os.path.expanduser("~/printer_data/config/scripts/restart_hook.sh")
+        if os.path.isfile(script_path):  # Check if the script exists
+            try:
+                logging.info("Executing restart_hook.sh")
+                subprocess.run([script_path], check=True)
+                logging.info("restart_hook.sh executed successfully")
+            except subprocess.CalledProcessError as e:
+                logging.error(f"restart_hook.sh failed with return code {e.returncode}")
+                break
+        else:
+            logging.info("restart_hook.sh not found. Skipping script execution.")
+
         start_args['start_reason'] = res
         if options.rotate_log_at_restart and bglogger is not None:
             bglogger.doRollover()
