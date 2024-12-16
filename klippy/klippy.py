@@ -383,7 +383,7 @@ def main():
         # Check if script exists and execute it
         if os.path.isfile(script_path):  # Check if the script exists
             try:
-                logging.info(f"Executing {script_path}")
+                logging.debug(f"Executing {script_path}")
                 # Run subprocess and capture output
                 result = subprocess.run(
                     [script_path],
@@ -391,9 +391,9 @@ def main():
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,  # Capture output as text
-                    timeout=30  # Timeout to prevent infinite hanging
+                    timeout=60  # Timeout to prevent infinite hanging
                 )
-                logging.info(f"{script_path} executed successfully with output:\n{result.stdout}")
+                logging.debug(f"{script_path} executed successfully with output:\n{result.stdout}")
                 if result.stderr:
                     logging.warning(f"{script_path} returned errors:\n{result.stderr}")
             except subprocess.TimeoutExpired:
@@ -404,7 +404,7 @@ def main():
                 logging.error(f"Error output:\n{e.stderr}")
                 break
         else:
-            logging.info(f"{script_path} not found. Skipping script execution.")
+            logging.debug(f"{script_path} not found. Skipping script execution.")
 
 
         start_args['start_reason'] = res

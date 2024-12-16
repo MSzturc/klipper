@@ -30,3 +30,4 @@ It contains the following additions:
 - Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
 - Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448
 - bugfix Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486
+- Added Before Restart Hook
