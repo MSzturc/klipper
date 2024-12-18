@@ -1,6 +1,4 @@
-Welcome to the Klipper project!
-
-It contains the following additions:
+Based on Klipper v0.12.0, enhanced with the following additional features:
 - Added Support for BDSensor - https://github.com/markniu/Bed_Distance_sensor
 - Fixed TMC5160 Driver - https://github.com/Klipper3d/klipper/pull/6644
 - Added Normalized Fan PWM power - https://github.com/DangerKlippers/danger-klipper/pull/44
