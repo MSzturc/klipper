@@ -476,7 +476,6 @@ class ConfigAutoSave:
     def cmd_SAVE_CONFIG(self, gcmd):
         if not self.fileconfig.sections():
             return
-        gcode = self.printer.lookup_object("gcode")
         # Create string containing autosave data
         cfgrdr = ConfigFileReader()
         autosave_data = cfgrdr.build_config_string(self.fileconfig)
