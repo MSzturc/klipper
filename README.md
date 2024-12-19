@@ -28,3 +28,4 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448
 - bugfix Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486
 - Added Before Restart Hook
+- Added [auto_reload] Module to detect changes in printer.cfg and automatically call RELOAD_GCODE_MACROS
