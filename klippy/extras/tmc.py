@@ -682,8 +682,9 @@ class BaseTMCCurrentHelper:
         self.driver_type = self.driver_name.split()[0] #Type of the stepper driver eg.: tmc5160
         self.name = self.driver_name.split()[-1] # Name of the stepper eg.: stepper_y
         
-        self.motor = config.get('motor')
-        self.motor_name = "motor_constants " + self.motor
+        self.motor = config.get('motor', None)
+        if self.motor is not None:
+            self.motor_name = "motor_constants " + self.motor
 
         self.mcu_tmc = mcu_tmc
         self.fields = mcu_tmc.get_fields()
@@ -740,7 +741,7 @@ class BaseTMCCurrentHelper:
                                                default=PWM_FREQ_TARGETS[self.driver_type],
                                                minval=10e3, maxval=100e3)
 
-        self.voltage = config.getfloat('voltage', minval=0.0, maxval=60.0)
+        self.voltage = config.getfloat('voltage', default=None, minval=0.0, maxval=60.0)
 
         self.extra_hysteresis = config.getint('extra_hysteresis', default=0,
                                               minval=0, maxval=8)
@@ -757,6 +758,17 @@ class BaseTMCCurrentHelper:
 
         self.overvoltage_vth = config.getfloat('overvoltage_vth', default=None,
                                               minval=0.0, maxval=60.0)
+        
+        if ( self.sense_resistor is not None
+         and self.motor is not None
+         and self.voltage is not None):
+            self.driver_tuning = True
+            logging.info(f"tmc {self.name} ::: AutoTuning activated!")
+        else : 
+            self.driver_tuning = None
+            logging.info(f"tmc {self.name} ::: AutoTuning not active!")
+
+            
         
         # req_{run|hold|home}_current
         # represents a requested value, which starts with
@@ -841,7 +853,8 @@ class BaseTMCCurrentHelper:
 
         self.set_actual_current(new_current)
         self.apply_current(print_time)
-        self.tune_driver(new_current, print_time)
+        if self.driver_tuning is not None:
+            self.tune_driver(new_current, print_time)
 
     def set_driver_velocity_field(self, field, velocity):
         register = self.fields.lookup_register(field, None)
