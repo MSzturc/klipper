@@ -877,80 +877,82 @@ class BaseTMCCurrentHelper:
         logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
 
         self._get_tmc_clock_frequency()
-        self._set_pwm_parameters(new_current)
-        self._set_spreadcycle_parameters()
-        self._set_hysteresis_parameters(new_current)
-        self._set_stallguard_parameters()
-        self._set_coolstep_parameters()
-        self._set_overvoltage_parameters()
-        self._set_highspeed_parameters()
+        self._configure_pwm(new_current)
+        self._configure_spreadcycle()
+        self._configure_hysteresis(new_current)
+        self._configure_stallguard()
+        self._configure_coolstep()
+        self._configure_overvoltage()
+        self._configure_highspeed()
 
     # Retrieves the clock frequency of the TMC driver.
     # Falls back to a default value (12.5 MHz) if retrieval fails.
+    DEFAULT_FREQUENCY = 12.5e6
+
     def _get_tmc_clock_frequency(self):
         try:
-            self.fclk = self.mcu_tmc.get_tmc_frequency() or 12.5e6
+            self.driver_clock_frequency = self.mcu_tmc.get_tmc_frequency() or self.DEFAULT_FREQUENCY
         except AttributeError:
-            self.fclk = 12.5e6
-        logging.info(f"tmc {self.name} ::: tmc clock: {self.fclk}")
+            self.driver_clock_frequency = self.DEFAULT_FREQUENCY
+        logging.info(f"tmc {self.name} ::: driver clock: {self.driver_clock_frequency}")
 
-    # Sets the parameters for PWM
-    def _set_pwm_parameters(self, new_current):
-        pwm_freq = next((i
-                        for i in [(3, 2./410),
-                                (2, 2./512),
-                                (1, 2./683),
-                                (0, 2./1024),
-                                (0, 0.)]
-                        if self.fclk * i[1] < self.pwm_freq_target))[0]
+    # Configures PWM parameters for optimal motor control and efficiency.
+    def _configure_pwm(self, new_current):
+        pwm_freq = self._calculate_pwm_frequency()
         logging.info(f"tmc {self.name} ::: pwm_freq: {pwm_freq}")
 
         motor_object = self.printer.lookup_object(self.motor_name)
-        pwmgrad = motor_object.pwmgrad(volts=self.voltage, fclk=self.fclk)
-        logging.info(f"tmc {self.name} ::: pwmgrad: {pwmgrad}")
+        pwmgrad = motor_object.pwmgrad(volts=self.voltage, fclk=self.driver_clock_frequency)
         pwmofs = motor_object.pwmofs(volts=self.voltage, current=new_current)
+
+        # Logging values for debug purposes
+        logging.info(f"tmc {self.name} ::: pwmgrad: {pwmgrad}")
         logging.info(f"tmc {self.name} ::: pwmofs: {pwmofs}")
 
+        # Set PWM-related fields
         self.fields.set_field("pwm_freq", pwm_freq)
-        self.fields.set_field('pwm_autoscale', True)
-        self.fields.set_field('pwm_autograd', True)
-        self.fields.set_field('pwm_grad', pwmgrad)
-        self.fields.set_field('pwm_ofs', pwmofs)
-        self.fields.set_field('pwm_reg', 15)
-        self.fields.set_field('pwm_lim', 4)
-        self.fields.set_field('tpwmthrs', 0xfffff)
+        self.fields.set_field("pwm_autoscale", True)
+        self.fields.set_field("pwm_autograd", True)
+        self.fields.set_field("pwm_grad", pwmgrad)
+        self.fields.set_field("pwm_ofs", pwmofs)
+        self.fields.set_field("pwm_reg", 15)
+        self.fields.set_field("pwm_lim", 4)
+        self.fields.set_field("tpwmthrs", 0xfffff)
 
-    # Configures SpreadCycle parameters for controlling motor noise, efficiency, and stability.
-    def _set_spreadcycle_parameters(self):
-        ncycles = int(math.ceil(self.fclk / self.pwm_freq_target))
-        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}")
+    # Helper function: Calculates the PWM frequency based on clock frequency and target.
+    def _calculate_pwm_frequency(self):
+        return next((i[0]
+                     for i in [(3, 2./410), (2, 2./512), (1, 2./683), (0, 2./1024), (0, 0.)]
+                     if self.driver_clock_frequency * i[1] < self.pwm_freq_target))
+
+    # Configures SpreadCycle parameters to optimize motor noise, efficiency, and stability.
+    def _configure_spreadcycle(self):
+        ncycles = self._calculate_ncycles()
         sdcycles = ncycles / 4
-        logging.info(f"tmc {self.name} ::: sdcycles: {sdcycles}")
+
         # Adjust timing for slow decay cycles to optimize performance.
+        toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
+        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {toff}")
 
-        self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
-        logging.info(f"tmc {self.name} ::: toff: {self.toff}")
-
-        if self.toff == 1 and self.tbl == 0:
+        if toff == 1 and self.tbl == 0:
             # Ensure valid blanking time for low toff values.
             self.tbl = 1
 
-        logging.info(f"tmc {self.name} ::: tbl: {self.tbl}")
+        pfdcycles = ncycles - (24 + 32 * toff) * 2 - [16, 34, 36, 54][self.tbl]
+        tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128)))) if self.tpfd is None else self.tpfd
 
-        pfdcycles = ncycles - (24 + 32 * self.toff) * 2 - [16, 34, 36, 54][self.tbl]
-        logging.info(f"tmc {self.name} ::: pfdcycles: {pfdcycles}")
+        logging.info(f"tmc {self.name} ::: tbl: {self.tbl}, pfdcycles: {pfdcycles}, tpfd: {tpfd}")
 
-        if self.tpfd is None:
-            self.tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128))))
-
-        logging.info(f"tmc {self.name} ::: tpfd: {self.tpfd}")
-
-        self.fields.set_field('tpfd', self.tpfd)
+        self.fields.set_field('tpfd', tpfd)
         self.fields.set_field('tbl', self.tbl)
-        self.fields.set_field('toff', self.toff)
+        self.fields.set_field('toff', toff)
 
-    # Sets hysteresis parameters to fine-tune motor torque
-    def _set_hysteresis_parameters(self, new_current):
+    # Helper function: Calculates the total number of cycles for SpreadCycle configuration.
+    def _calculate_ncycles(self):
+        return int(math.ceil(self.driver_clock_frequency / self.pwm_freq_target))
+
+    # Configures hysteresis parameters to fine-tune motor torque control.
+    def _configure_hysteresis(self, new_current):
         motor_object = self.printer.lookup_object(self.motor_name)
 
         hstrt, hend = motor_object.hysteresis(
@@ -959,20 +961,21 @@ class BaseTMCCurrentHelper:
             current=new_current,
             tbl=self.tbl,
             toff=self.toff,
-            fclk=self.fclk,
+            fclk=self.driver_clock_frequency,
             extra=self.extra_hysteresis,
             rsense=self.sense_resistor,
             scale=self.cs
         )
 
-        logging.info(f"tmc {self.name} ::: hstrt: {hstrt}")
-        logging.info(f"tmc {self.name} ::: hend: {hend}")
-        logging.info(f"tmc {self.name} ::: extra: {self.extra_hysteresis}")
+        # Logging hysteresis values for debugging
+        logging.info(f"tmc {self.name} ::: hstrt: {hstrt}, hend: {hend}, extra: {self.extra_hysteresis}")
+
+        # Set hysteresis-related fields
         self.fields.set_field('hstrt', hstrt)
         self.fields.set_field('hend', hend)
 
     # Configures StallGuard parameters for detecting and responding to motor stalls.
-    def _set_stallguard_parameters(self):
+    def _configure_stallguard(self):
         pwmthrs = 0
         vmaxpwm = self._calculate_vmaxpwm_parameters()
         coolthrs = 0.75 * self.stepper.get_rotation_distance()[0]
@@ -996,7 +999,7 @@ class BaseTMCCurrentHelper:
         logging.info(f"tmc {self.name} ::: pwmthrs: {pwmthrs}")
 
     # Dynamically adjusts motor current using CoolStep for improved efficiency and reduced heat.
-    def _set_coolstep_parameters(self):
+    def _configure_coolstep(self):
         coolthrs = 0.75 * self.stepper.get_rotation_distance()[0]
         self.set_driver_velocity_field('tcoolthrs', coolthrs)
         self.fields.set_field('faststandstill', True)
@@ -1009,14 +1012,14 @@ class BaseTMCCurrentHelper:
         self.fields.set_field('sfilt', 0)
         self.fields.set_field('iholddelay', 12)
 
-    # Configures overvoltage parameters
-    def _set_overvoltage_parameters(self):
+    # Configures overvoltage protection to prevent damage to the motor driver.
+    def _configure_overvoltage(self):
         if self.overvoltage_vth is not None:
             vth = int(self.overvoltage_vth / 0.009732)
             self.fields.set_field('overvoltage_vth', vth)
 
-    # Adjusts parameters for high-speed velocity
-    def _set_highspeed_parameters(self):
+    # Adjusts parameters for high-speed motor operation to maintain stability.
+    def _configure_highspeed(self):
         vmaxpwm = 1.2 * self._calculate_vmaxpwm_parameters()
         logging.info(f"tmc {self.name} ::: vmaxpwm: {vmaxpwm}")
         self.set_driver_velocity_field('thigh', vmaxpwm)
@@ -1024,12 +1027,13 @@ class BaseTMCCurrentHelper:
         self.fields.set_field('vhighchm', False)
         self.fields.set_field('multistep_filt', True)
 
-    # Calculates the maximum PWM value based on motor speed and rotation distance.
+    # Helper Method: Calculates the maximum PWM value based on motor speed and rotation distance.
     def _calculate_vmaxpwm_parameters(self):
         motor_object = self.printer.lookup_object(self.motor_name)
         maxpwmrps = motor_object.maxpwmrps(volts=self.voltage, current=self.new_current)
         rdist, _ = self.stepper.get_rotation_distance()
         return maxpwmrps * rdist
+
 
 
 # Helper to configure StallGuard and CoolStep minimum velocity
