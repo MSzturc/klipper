@@ -887,18 +887,20 @@ class BaseTMCCurrentHelper:
 
     # Retrieves the clock frequency of the TMC driver.
     # Falls back to a default value (12.5 MHz) if retrieval fails.
-    DEFAULT_FREQUENCY = 12.5e6
+    # Source: TMC5160A Page 122: Clock oscillator frequency
+    DEFAULT_MAX_FREQUENCY = 12.5e6
 
     def _get_tmc_clock_frequency(self):
         try:
-            self.driver_clock_frequency = self.mcu_tmc.get_tmc_frequency() or self.DEFAULT_FREQUENCY
+            self.driver_clock_frequency = self.mcu_tmc.get_tmc_frequency() or self.DEFAULT_MAX_FREQUENCY
         except AttributeError:
-            self.driver_clock_frequency = self.DEFAULT_FREQUENCY
+            self.driver_clock_frequency = self.DEFAULT_MAX_FREQUENCY
         logging.info(f"tmc {self.name} ::: driver clock: {self.driver_clock_frequency}")
 
     # Configures PWM parameters for optimal motor control and efficiency.
     def _configure_pwm(self, new_current):
-        pwm_freq = self._calculate_pwm_frequency()
+        pwm_freq, calculated_freq = self._calculate_pwm_frequency()
+        logging.info(f"tmc {self.name} ::: Calculated Frequency: {calculated_freq} kHz")
         logging.info(f"tmc {self.name} ::: pwm_freq: {pwm_freq}")
 
         motor_object = self.printer.lookup_object(self.motor_name)
@@ -919,11 +921,17 @@ class BaseTMCCurrentHelper:
         self.fields.set_field("pwm_lim", 4)
         self.fields.set_field("tpwmthrs", 0xfffff)
 
-    # Helper function: Calculates the PWM frequency based on clock frequency and target.
+    # Calculates the PWM frequency based on clock frequency and target.
+    # Source: TMC5160A Page 60: Choices of PWM frequency for Stealthchop
     def _calculate_pwm_frequency(self):
-        return next((i[0]
-                     for i in [(3, 2./410), (2, 2./512), (1, 2./683), (0, 2./1024), (0, 0.)]
-                     if self.driver_clock_frequency * i[1] < self.pwm_freq_target))
+        for prescaler, factor in [(3, 2./410), (2, 2./512), (1, 2./683), (0, 2./1024), (0, 0.)]:
+            calculated_freq_mhz = self.driver_clock_frequency * factor  # Frequency in MHz
+            if calculated_freq_mhz < self.pwm_freq_target:
+                calculated_freq_khz = calculated_freq_mhz * 1000  # Convert MHz to kHz
+                return prescaler, round(calculated_freq_khz, 1)  # Round to 1 decimal place
+
+
+
 
     # Configures SpreadCycle parameters to optimize motor noise, efficiency, and stability.
     def _configure_spreadcycle(self):
