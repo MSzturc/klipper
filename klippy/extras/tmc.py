@@ -948,14 +948,14 @@ class BaseTMCCurrentHelper:
             # Ensure valid blanking time for low toff values.
             self.tbl = 1
 
-        tblcycles = [16, 34, 36, 54][self.tbl]
-        toffcycles = (24 + 32 * toff)
+        tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
+        tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
 
         # ncycles = steps needed for a whole cycle
         # - 2x slow decay phase
         # - Blank time
         # = Cycles left for pfd
-        pfdcycles = ncycles - toffcycles * 2 - tblcycles
+        pfdcycles = ncycles - tsd * 2 - tblank
         tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128)))) if self.tpfd is None else self.tpfd
 
         logging.info(f"tmc {self.name} ::: tbl: {self.tbl}, pfdcycles: {pfdcycles}, tpfd: {tpfd}")
@@ -964,7 +964,7 @@ class BaseTMCCurrentHelper:
         self.fields.set_field('tbl', self.tbl)
         self.fields.set_field('toff', toff)
 
-        chop_freq=(2*toffcycles+tblcycles)/1000/self.driver_clock_frequency
+        chop_freq=(2*tsd+tblank)/1000/self.driver_clock_frequency
         logging.info(f"tmc {self.name} ::: chop_freq: {chop_freq}")
 
     # Configures hysteresis parameters to fine-tune motor torque control.
