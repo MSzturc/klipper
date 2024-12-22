@@ -925,10 +925,9 @@ class BaseTMCCurrentHelper:
     # Source: TMC5160A Page 60: Choices of PWM frequency for Stealthchop
     def _calculate_pwm_frequency(self):
         for prescaler, factor in [(3, 2./410), (2, 2./512), (1, 2./683), (0, 2./1024), (0, 0.)]:
-            calculated_freq_mhz = self.driver_clock_frequency * factor  # Frequency in MHz
-            if calculated_freq_mhz < self.pwm_freq_target:
-                calculated_freq_khz = calculated_freq_mhz * 1000  # Convert MHz to kHz
-                return prescaler, round(calculated_freq_khz, 1)  # Round to 1 decimal place
+            calculated_freq = self.driver_clock_frequency * factor 
+            if calculated_freq < self.pwm_freq_target:
+                return prescaler, round(calculated_freq, 1)
 
 
 

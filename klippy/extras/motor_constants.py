@@ -28,10 +28,13 @@ class MotorConstants:
         if steps==0:
             steps=self.S
         return int(math.ceil(self.cbemf * 2 * math.pi * fclk  * 1.46 / (volts * 256.0 * steps)))
+    # Source: TMC5160A Page 63: Velocity Based Scaling
+    # I: The target RMS current
     def pwmofs(self, volts=24.0, current=0.0):
         I = current if current > 0.0 else self.I
         return int(math.ceil(374 * self.R * I / volts))
     # Maximum revolutions per second before PWM maxes out.
+    # Source: Unknown
     def maxpwmrps(self, fclk=12.5e6, steps=0, volts=24.0, current=0.0):
         if steps==0:
             steps=self.S
