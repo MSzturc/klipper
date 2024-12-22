@@ -16,7 +16,14 @@ class MotorConstants:
         self.T = config.getfloat('holding_torque', minval=0.)
         self.S = config.getint('steps_per_revolution', minval=0)
         self.I = config.getfloat('max_current', minval=0.)
+
+        #cbemf is the back EMF constant of the motor in Volts per radian/second.
+        # T: Motor specific holding torque
+        # I: The motor’s rated phase current for the specified holding torque
+        # Source: TMC5160A Page 64: UNDERSTANDING THE BACK EMF CONSTANT OF A MOTOR
         self.cbemf = self.T / (2.0 * self.I)
+    
+    # Source: TMC5160A Page 63: First approximation for PWM_GRAD
     def pwmgrad(self, fclk=12.5e6, steps=0, volts=24.0):
         if steps==0:
             steps=self.S
