@@ -3,7 +3,7 @@
 # Copyright (C) 2018-2020  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, collections
+import logging, collections, os, math
 import stepper
 from . import stepstick_defs
 
@@ -656,11 +656,35 @@ def TMCStealthchopHelper(config, mcu_tmc):
         # TMC2208 uses en_spreadCycle
         fields.set_field("en_spreadcycle", not en_pwm_mode)
 
+
+PWM_FREQ_TARGETS = {"tmc2130": 55e3,
+                    "tmc2208": 55e3,
+                    "tmc2209": 55e3,
+                    "tmc2240": 20e3, # 2240s run very hot at high frequencies
+                    "tmc2660": 55e3,
+                    "tmc5160": 55e3}
+
 class BaseTMCCurrentHelper:
     def __init__(self, config, mcu_tmc):
         self.printer = config.get_printer()
         self.config_file = self.printer.lookup_object("configfile")
-        self.name = config.get_name().split()[-1]
+
+        self.current_directory = os.path.dirname(os.path.realpath(__file__))
+        self.motor_db_file = os.path.join(self.current_directory, 'motor_database.cfg')
+        try:
+            self.motor_db = self.config_file.read_config(self.motor_db_file)
+        except Exception:
+            raise config.error("Cannot load config '%s'" % (self.motor_db_file,))
+        for motor_section in self.motor_db.get_prefix_sections(''):
+            self.printer.load_object(self.motor_db, motor_section.get_name())
+    
+        self.driver_name = config.get_name() #Name of the section eg.: tmc5160 stepper_y
+        self.driver_type = self.driver_name.split()[0] #Type of the stepper driver eg.: tmc5160
+        self.name = self.driver_name.split()[-1] # Name of the stepper eg.: stepper_y
+        
+        self.motor = config.get('motor')
+        self.motor_name = "motor_constants " + self.motor
+
         self.mcu_tmc = mcu_tmc
         self.fields = mcu_tmc.get_fields()
 
@@ -712,6 +736,28 @@ class BaseTMCCurrentHelper:
             "current_change_dwell_time", 0.5, above=0.0
         )
 
+        self.pwm_freq_target = config.getfloat('pwm_freq_target',
+                                               default=PWM_FREQ_TARGETS[self.driver_type],
+                                               minval=10e3, maxval=100e3)
+
+        self.voltage = config.getfloat('voltage', minval=0.0, maxval=60.0)
+
+        self.extra_hysteresis = config.getint('extra_hysteresis', default=0,
+                                              minval=0, maxval=8)
+
+        self.tbl = config.getint('driver_TBL', default=1, minval=0, maxval=3)
+        self.toff = config.getint('driver_TOFF', default=None, minval=1, maxval=15)
+        self.tpfd = config.getint('driver_TPFD', default=None, minval=0, maxval=15)
+
+        self.cs = config.getint('current_scale', default=0, minval=0, maxval=31)
+
+
+        self.sg4_thrs = config.getint('driver_SGTHRS', default=None, minval=0, maxval=255)
+        self.sgt = config.getint('driver_SGT', default=None, minval=-64, maxval=63)
+
+        self.overvoltage_vth = config.getfloat('overvoltage_vth', default=None,
+                                              minval=0.0, maxval=60.0)
+        
         # req_{run|hold|home}_current
         # represents a requested value, which starts with
         # the configured value but can change during runtime
@@ -795,6 +841,187 @@ class BaseTMCCurrentHelper:
 
         self.set_actual_current(new_current)
         self.apply_current(print_time)
+        self.tune_driver(new_current, print_time)
+
+    def set_driver_velocity_field(self, field, velocity):
+        register = self.fields.lookup_register(field, None)
+
+        # Just bail if the field doesn't exist.
+        if register is None:
+            return
+
+        force_move = self.printer.lookup_object("force_move")
+        self.stepper = force_move.lookup_stepper(self.name)
+
+        arg = TMCtstepHelper(self.mcu_tmc, velocity,
+                                 pstepper=self.stepper)
+        logging.info("tmc %s ::: set_driver_velocity_field %s=%s(%s)",
+                     self.name, field, repr(arg), repr(velocity))
+        self.fields.set_field(field, arg)
+
+    def tune_driver(self, new_current, print_time=None):
+        logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
+
+        try:
+            self.fclk = self.mcu_tmc.get_tmc_frequency() or 12.5e6
+        except AttributeError:
+            self.fclk = 12.5e6
+
+        logging.info(f"tmc {self.name} ::: tmc clock: {self.fclk}")
+
+        # calculate the highest pwm_freq that gives less than 50 kHz chopping
+        pwm_freq = next((i
+                    for i in [(3, 2./410),
+                            (2, 2./512),
+                            (1, 2./683),
+                            (0, 2./1024),
+                            (0, 0.) # Default case, just do the best we can.
+                            ]
+                    if self.fclk*i[1] < self.pwm_freq_target))[0]
+
+        logging.info(f"tmc {self.name} ::: pwm_freq: {pwm_freq}")
+        self.fields.set_field("pwm_freq", pwm_freq)
+
+        # calculate spreadcycle parameters
+        ncycles = int(math.ceil(self.fclk / self.pwm_freq_target))
+        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}")
+        sdcycles = ncycles / 4
+        logging.info(f"tmc {self.name} ::: sdcycles: {sdcycles}")
+        if self.toff == 0 or self.toff is None:
+            # About half the cycle should be taken by the two slow decay cycles
+            self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
+
+        logging.info(f"tmc {self.name} ::: toff: {self.toff}")
+
+        if self.toff == 1 and self.tbl == 0:
+            # blank time of 16 cycles will not work in this case
+            self.tbl = 1
+
+        logging.info(f"tmc {self.name} ::: tbl: {self.tbl}")
+
+        pfdcycles = ncycles - (24 + 32 * self.toff) * 2 - [16, 34, 36, 54][self.tbl]
+        logging.info(f"tmc {self.name} ::: pfdcycles: {pfdcycles}")
+        if self.tpfd is None:
+            self.tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128))))
+
+        logging.info(f"tmc {self.name} ::: tpfd: {self.tpfd}")
+
+        self.fields.set_field('tpfd', self.tpfd)
+        self.fields.set_field('tbl', self.tbl)
+        self.fields.set_field('toff', self.toff)
+
+        motor_object = self.printer.lookup_object(self.motor_name)
+
+        # calculate hysteresis
+        hstrt, hend = motor_object.hysteresis(
+            name=self.name,
+            volts=self.voltage,
+            current=new_current,
+            tbl=self.tbl,
+            toff=self.toff,
+            fclk=self.fclk,
+            extra=self.extra_hysteresis,
+            rsense=self.sense_resistor,
+            scale=self.cs
+            )
+
+        logging.info(f"tmc {self.name} ::: hstrt: {hstrt}")
+        logging.info(f"tmc {self.name} ::: hend: {hend}")
+        logging.info(f"tmc {self.name} ::: extra: {self.extra_hysteresis}")
+        self.fields.set_field('hstrt', hstrt)
+        self.fields.set_field('hend', hend)
+
+        maxpwmrps = motor_object.maxpwmrps(volts=self.voltage, current=new_current)
+        logging.info(f"tmc {self.name} ::: maxpwmrps: {maxpwmrps}")
+
+        force_move = self.printer.lookup_object("force_move")
+        self.stepper = force_move.lookup_stepper(self.name)
+        rdist, _ = self.stepper.get_rotation_distance()
+        # Speed at which we run out of PWM control and should switch to fullstep
+        vmaxpwm = maxpwmrps * rdist
+        logging.info(f"tmc {self.name} ::: vmaxpwm: {vmaxpwm}")
+
+        coolthrs = 0.75 * rdist
+        logging.info(f"tmc {self.name} ::: coolthrs: {coolthrs}")
+
+        pwmthrs = 0
+        # Stallguard on the TMC2209
+        if self.fields.lookup_register("sg4_thrs", None) is not None:
+            # we have SG4
+            # 2240 doesn't care about pwmthrs vs coolthrs ordering, but this is desirable
+            pwmthrs = max(0.2 * vmaxpwm, 1.125 * coolthrs)
+
+            if self.self.sg4_thrs is not None:
+                self.fields.set_field('sg4_thrs', self.sg4_thrs)
+                self.fields.set_field('sg4_filt_en', True)
+
+        elif self.fields.lookup_register("sgthrs", None) is not None:
+            # With SG4 on 2209, pwmthrs should be greater than coolthrs
+            pwmthrs = max(0.2 * vmaxpwm, 1.125 * coolthrs)
+
+            if self.self.sg4_thrs is not None:
+                self.fields.set_field('sgthrs', self.sg4_thrs)
+        else:
+            # We do not have SG4, so this makes the world safe for
+            # sensorless homing in the presence of CoolStep
+            # return 0.5 * coolthrs
+            pwmthrs = 0.5 * vmaxpwm
+
+        # Stallguard on the TMC5160
+        if self.sgt is not None:
+            self.fields.set_field('sgt', self.sgt)
+
+        logging.info(f"tmc {self.name} ::: pwmthrs: {pwmthrs}")
+
+        # Set PWM Parameters
+        pwmgrad = motor_object.pwmgrad(volts=self.voltage, fclk=self.fclk)
+        logging.info(f"tmc {self.name} ::: pwmgrad: {pwmthrs}")
+        pwmofs = motor_object.pwmofs(volts=self.voltage, current=new_current)
+        logging.info(f"tmc {self.name} ::: pwmofs: {pwmofs}")
+
+        self.fields.set_field('pwm_autoscale', True)
+        self.fields.set_field('pwm_autograd', True)
+        self.fields.set_field('pwm_grad', pwmgrad)
+        self.fields.set_field('pwm_ofs', pwmofs)
+        self.fields.set_field('pwm_reg', 15)
+        self.fields.set_field('pwm_lim', 4)
+        self.fields.set_field('tpwmthrs', 0xfffff)
+
+        # TODO: Prüfen ob der code mit handle_homing_move_begin / handle_homing_move_end zusammen funktioniert
+        reg = self.fields.lookup_register("en_pwm_mode", None)
+        if reg is None:
+            self.fields.set_field('en_spreadcycle', True) # TMC2208 use en_spreadcycle instead of en_pwm_mode
+        else:
+            self.fields.set_field('en_pwm_mode', False)
+
+        # Setup Coolstep
+        # One revolution every two seconds is about as slow as coolstep can go
+        self.set_driver_velocity_field('tcoolthrs', coolthrs)
+
+        self.fields.set_field('faststandstill', True)
+        self.fields.set_field('small_hysteresis', False)
+        self.fields.set_field('semin', 2)
+        self.fields.set_field('semax', 4)
+        self.fields.set_field('seup', 3)
+        self.fields.set_field('sedn', 2)
+        self.fields.set_field('seimin', 1) # If we drop to 1/4 current, high accels don't work right
+        self.fields.set_field('sfilt', 0)
+        self.fields.set_field('iholddelay', 12)
+
+        # Set the optional overvoltage snubber built into the TMC2240 and TMC5160
+        if self.overvoltage_vth is not None:
+            vth = int((self.overvoltage_vth / 0.009732))
+            self._set_driver_field('overvoltage_vth', vth)
+
+        vhigh = 1.2 * vmaxpwm
+        logging.info(f"tmc {self.name} ::: vhigh: {vhigh}")
+        self.set_driver_velocity_field('thigh', vhigh)
+
+        self.fields.set_field('vhighfs', False)
+        self.fields.set_field('vhighchm', False) # Even though we are fullstepping, we want SpreadCycle control
+
+        self.fields.set_field('multistep_filt', True)
+
 
 # Helper to configure StallGuard and CoolStep minimum velocity
 def TMCVcoolthrsHelper(config, mcu_tmc):
