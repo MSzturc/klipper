@@ -40,10 +40,7 @@ class MotorConstants:
             steps=self.S
         return (255 - self.pwmofs(volts, current)) / ( math.pi * self.pwmgrad(fclk, steps))
     def hysteresis(self,name, extra, fclk, volts, current, tbl, toff, rsense,scale):
-        if current > 0.0:
-            I = current * math.sqrt(2)
-        else:
-            I = self.I
+        I = (current if current > 0.0 else self.I) * math.sqrt(2)
         
         logging.info(f"tmc {name} ::: calculating hysteresis")
         logging.info(f"tmc {name} ::: Ipeak: {I}")
