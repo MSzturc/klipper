@@ -929,12 +929,12 @@ class BaseTMCCurrentHelper:
             if calculated_freq < self.pwm_freq_target:
                 return prescaler, round(calculated_freq, 1)
 
-
-
-
     # Configures SpreadCycle parameters to optimize motor noise, efficiency, and stability.
     def _configure_spreadcycle(self):
-        ncycles = self._calculate_ncycles()
+        ncycles = int(math.ceil(self.driver_clock_frequency / self.pwm_freq_target))
+
+        # Two slow decay cycles make up for 50% of overall chopper cycle time
+        # => 1/2 (50%) * 1/2 (2 slow dacay cycles) = 1/4
         sdcycles = ncycles / 4
 
         # Adjust timing for slow decay cycles to optimize performance.
@@ -953,10 +953,6 @@ class BaseTMCCurrentHelper:
         self.fields.set_field('tpfd', tpfd)
         self.fields.set_field('tbl', self.tbl)
         self.fields.set_field('toff', toff)
-
-    # Helper function: Calculates the total number of cycles for SpreadCycle configuration.
-    def _calculate_ncycles(self):
-        return int(math.ceil(self.driver_clock_frequency / self.pwm_freq_target))
 
     # Configures hysteresis parameters to fine-tune motor torque control.
     def _configure_hysteresis(self, new_current):
