@@ -746,7 +746,7 @@ class BaseTMCCurrentHelper:
         self.extra_hysteresis = config.getint('extra_hysteresis', default=0,
                                               minval=0, maxval=8)
 
-        self.tbl = config.getint('driver_TBL', default=1, minval=0, maxval=3)
+        self.tbl = config.getint('driver_TBL', default=None, minval=0, maxval=3)
         self.toff = config.getint('driver_TOFF', default=None, minval=1, maxval=15)
         self.tpfd = config.getint('driver_TPFD', default=None, minval=0, maxval=15)
 
@@ -940,6 +940,9 @@ class BaseTMCCurrentHelper:
         # Adjust timing for slow decay cycles to optimize performance.
         toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
         logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {toff}")
+
+        if self.tbl is None:
+            self.tbl = 0
 
         if toff == 1 and self.tbl == 0:
             # Ensure valid blanking time for low toff values.
