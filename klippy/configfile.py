@@ -17,7 +17,7 @@ class sentinel:
 
 class SectionInterpolation(configparser.Interpolation):
     """
-    Variable interpolation replacing ${[section.]option}
+    variable interpolation replacing ${[section.]option}
     """
 
     _KEYCRE = re.compile(
@@ -175,6 +175,16 @@ class ConfigWrapper:
 # Config file parsing (with include file support)
 ######################################################################
 
+class ConfigNamespace:
+    def __init__(self, data):
+        for key, value in data.items():
+            setattr(self, key, value)
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+    def __repr__(self):
+        return str(self.__dict__)
 
 class ConfigFileReader:
     def read_config_file(self, filename):
@@ -218,25 +228,87 @@ class ConfigFileReader:
 
     def build_fileconfig(self, data, filename):
         fileconfig = self._create_fileconfig()
-        self.append_fileconfig(fileconfig, data, filename)
+        self.append_fileconfig(fileconfig, data, filename)  
         return fileconfig
 
     def _resolve_include(self, source_filename, include_spec, fileconfig, visited):
-        dirname = os.path.dirname(source_filename)
-        # Resolve variables in the include_spec
-        try:
-            include_spec = fileconfig._interpolation.before_get(
-                fileconfig, None, None, include_spec, None
-            )
-        except configparser.NoSectionError:
-            # Defer resolving the include if section is not yet defined
-            return include_spec
+        """
+        Resolve includes with support for interpolation and conditions.
+        Supports:
+        - [include def.cfg]
+        - [include ${constants.macro}.cfg]
+        - [include if:${expression} path/to/include]
+        - [include if:${expression} ${macro}.cfg]
+        """
+        # Check for conditional includes in the format:
+        # [include if:${expression} path/to/include]
+        condition_match = re.match(r"if:\$\{(.+)\}\s+(.*)", include_spec)
+        if condition_match:
+            expression, include_path = condition_match.groups()
 
-        include_glob = os.path.join(dirname, include_spec)
-        include_filenames = glob.glob(include_glob, recursive=True)
-        if not include_filenames and not glob.has_magic(include_glob):
-            # Empty set is OK if wildcard but not for direct file reference
-            raise error(f"Include file '{include_glob}' does not exist")
+            # Prepare the context with proper type conversion
+            def convert_value(value):
+                try:
+                    # Convert boolean-like strings
+                    if value.lower() == "true":
+                        return True
+                    if value.lower() == "false":
+                        return False
+                    # Convert to int or float if possible, otherwise keep as string
+                    return int(value) if value.isdigit() else float(value) if "." in value else value
+                except ValueError:
+                    return value
+
+            context = {
+                section: ConfigNamespace({key: convert_value(value) for key, value in fileconfig.items(section)})
+                for section in fileconfig.sections()
+            }
+
+            try:
+                # Use eval safely with a restricted context
+                condition_result = eval(expression, {"__builtins__": None}, context)
+            except Exception as e:
+                logging.warning(f"Failed to evaluate condition '{expression}': {e}")
+                condition_result = False
+
+            if not condition_result:
+                logging.info(f"Condition '{expression}' not met, skipping include {include_path}")
+                return None
+        else:
+            include_path = include_spec
+
+        # Custom interpolation to resolve ${...} placeholders
+        def custom_interpolation(value):
+            key_cre = re.compile(r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}")
+            while True:
+                match = key_cre.search(value)
+                if not match:
+                    break
+
+                section = match.group("section") or "constants"
+                option = match.group("option")
+
+                try:
+                    replacement = fileconfig.get(section, option)
+                except (configparser.NoSectionError, configparser.NoOptionError) as e:
+                    raise ValueError(f"Failed to resolve interpolation for '{value}': {e}")
+
+                value = value[: match.start()] + replacement + value[match.end() :]
+            return value
+
+        try:
+            include_path = custom_interpolation(include_path)
+        except ValueError as e:
+            logging.warning(f"Failed to resolve interpolation in include '{include_spec}': {e}")
+            return None
+
+        dirname = os.path.dirname(source_filename)
+        include_path = os.path.join(dirname, include_path)
+
+        include_filenames = glob.glob(include_path, recursive=True)
+        if not include_filenames and not glob.has_magic(include_path):
+            raise error(f"Include file '{include_path}' does not exist")
+        
         include_filenames.sort()
         for include_filename in include_filenames:
             include_data = self.read_config_file(include_filename)
@@ -283,6 +355,7 @@ class ConfigFileReader:
         fileconfig = self._create_fileconfig()
         self._parse_config(data, filename, fileconfig, set())
         return fileconfig
+
 
 
 ######################################################################
