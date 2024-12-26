@@ -17,7 +17,7 @@ class sentinel:
 
 class SectionInterpolation(configparser.Interpolation):
     """
-    variable interpolation replacing ${[section.]option}
+    Variable interpolation replacing ${[section.]option}
     """
 
     _KEYCRE = re.compile(
@@ -175,21 +175,23 @@ class ConfigWrapper:
 # Config file parsing (with include file support)
 ######################################################################
 
+
 class ConfigFileReader:
     def read_config_file(self, filename):
         try:
-            f = open(filename, 'r')
-            data = f.read()
-            f.close()
-        except:
-            msg = "Unable to open config file %s" % (filename,)
+            with open(filename, 'r') as f:
+                data = f.read()
+        except Exception as e:
+            msg = f"Unable to open config file {filename}: {e}"
             logging.exception(msg)
             raise error(msg)
         return data.replace('\r\n', '\n')
+
     def build_config_string(self, fileconfig):
         sfile = io.StringIO()
         fileconfig.write(sfile)
         return sfile.getvalue().strip()
+
     def append_fileconfig(self, fileconfig, data, filename):
         if not data:
             return
@@ -204,6 +206,7 @@ class ConfigFileReader:
             fileconfig.read_file(sbuffer, filename)
         else:
             fileconfig.readfp(sbuffer, filename)
+
     def _create_fileconfig(self):
         access_tracking = {}
         fileconfig = configparser.RawConfigParser(
@@ -212,34 +215,44 @@ class ConfigFileReader:
             interpolation=SectionInterpolation(access_tracking),
         )
         return fileconfig
+
     def build_fileconfig(self, data, filename):
         fileconfig = self._create_fileconfig()
         self.append_fileconfig(fileconfig, data, filename)
         return fileconfig
-    def _resolve_include(self, source_filename, include_spec, fileconfig,
-                         visited):
+
+    def _resolve_include(self, source_filename, include_spec, fileconfig, visited):
         dirname = os.path.dirname(source_filename)
-        include_spec = include_spec.strip()
+        # Resolve variables in the include_spec
+        try:
+            include_spec = fileconfig._interpolation.before_get(
+                fileconfig, None, None, include_spec, None
+            )
+        except configparser.NoSectionError:
+            # Defer resolving the include if section is not yet defined
+            return include_spec
+
         include_glob = os.path.join(dirname, include_spec)
         include_filenames = glob.glob(include_glob, recursive=True)
         if not include_filenames and not glob.has_magic(include_glob):
             # Empty set is OK if wildcard but not for direct file reference
-            raise error("Include file '%s' does not exist" % (include_glob,))
+            raise error(f"Include file '{include_glob}' does not exist")
         include_filenames.sort()
         for include_filename in include_filenames:
             include_data = self.read_config_file(include_filename)
-            self._parse_config(include_data, include_filename, fileconfig,
-                               visited)
-        return include_filenames
+            self._parse_config(include_data, include_filename, fileconfig, visited)
+        return None
+
     def _parse_config(self, data, filename, fileconfig, visited):
         path = os.path.abspath(filename)
         if path in visited:
-            raise error("Recursive include of config file '%s'" % (filename))
+            raise error(f"Recursive include of config file '{filename}'")
         visited.add(path)
         lines = data.split('\n')
         # Buffer lines between includes and parse as a unit so that overrides
         # in includes apply linearly as they do within a single file
         buf = []
+        pending_includes = []
         for line in lines:
             # Strip trailing comment
             pos = line.find('#')
@@ -249,15 +262,23 @@ class ConfigFileReader:
             mo = configparser.RawConfigParser.SECTCRE.match(line)
             header = mo and mo.group('header')
             if header and header.startswith('include '):
-                self.append_fileconfig(fileconfig, '\n'.join(buf), filename)
-                del buf[:]
                 include_spec = header[8:].strip()
-                self._resolve_include(filename, include_spec, fileconfig,
-                                      visited)
+                pending_includes.append(include_spec)
             else:
                 buf.append(line)
+        # Parse buffered lines to set up initial sections
         self.append_fileconfig(fileconfig, '\n'.join(buf), filename)
+        # Process pending includes
+        unresolved_includes = []
+        for include_spec in pending_includes:
+            result = self._resolve_include(filename, include_spec, fileconfig, visited)
+            if result:
+                unresolved_includes.append(result)
+        # Retry unresolved includes
+        for include_spec in unresolved_includes:
+            self._resolve_include(filename, include_spec, fileconfig, visited)
         visited.remove(path)
+
     def build_fileconfig_with_includes(self, data, filename):
         fileconfig = self._create_fileconfig()
         self._parse_config(data, filename, fileconfig, set())
