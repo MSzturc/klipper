@@ -145,55 +145,41 @@ class ConfigWrapper:
 ######################################################################
 class SectionInterpolation(configparser.Interpolation):
     """
-    Variable interpolation replacing ${[section.]option}
+    Variable interpolation of the form ${[section.]option[:default_value]}
     and evaluating arithmetic expressions if applicable.
     """
 
     # -------------------------------------------------------------------------
-    # _KEYCRE: Matches interpolation variables of the form ${[section.]option}
+    # _KEYCRE: Matches interpolation variables of the form
+    #    ${[section.]option[:default_value]}
     #
-    # Examples for config lines where _KEYCRE is used:
-    #   result = ${constants.value} + 15
-    #   host = ${db.host}
-    #   port = ${port}  (uses current/implicit section if not specified)
+    # Examples of config lines:
+    #   result = ${constants.value:42} + 15
+    #   host = ${db.host:localhost}
+    #   port = ${port:5432}
     #
     # Explanation:
-    #   - (?:(?P<section>[^.:${}]+)[.:])? : optionally captures a section name
-    #     (stopping at '.', ':', '{', '}' or '$') and then a dot or colon.
-    #   - (?P<option>[^${}]+) : captures the option name until a '{' or '}' or '$'.
+    #   - (?:(?P<section>[^.:${}]+)[.:])? : optional section
+    #   - (?P<option>[^${}:]+)            : key
+    #   - (?::(?P<default>[^{}]+))?       : optional default value
     #
     # Usage in code:
-    #   1) "before_get" method searches for matches in value with _KEYCRE.
-    #   2) If found, it retrieves that config value and replaces it in the string.
+    #   1) "before_get" looks for matches in `value` with _KEYCRE.
+    #   2) If found, it attempts to load the corresponding config value.
+    #      If that fails, the default value (if provided) is used.
     # -------------------------------------------------------------------------
     _KEYCRE = re.compile(
-        r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}"
+        r"\$\{"
+        r"(?:(?P<section>[^.:${}]+)[.:])?"
+        r"(?P<option>[^${}:]+)"
+        r"(?::(?P<default>[^{}]+))?"
+        r"\}"
     )
 
     # -------------------------------------------------------------------------
-    # _ARITHMETIC_PATTERN: Detects whether a string is (potentially) a pure
-    # arithmetic expression consisting of digits, decimal points, +, -, *, /,
-    # and whitespace. Does NOT allow parentheses, exponentiation, etc.
-    #
-    # Examples that match this pattern:
-    #   "15 + 20"
-    #   "3.14 * 2"
-    #   "10 - 5 * 2"
-    #   "  42 /  6 "
-    #
-    # Examples that do NOT match (would return None):
-    #   "hello world"
-    #   "3**2"        (# not allowed in the pattern)
-    #   "2 + a"       (# 'a' is not a digit)
-    #
-    # Usage in code:
-    #   1) After interpolation resolves, we check if the final string
-    #      matches _ARITHMETIC_PATTERN. If yes, we try to eval it as a
-    #      simple arithmetic expression.
+    # _ARITHMETIC_PATTERN: Detects (potentially) pure arithmetic expressions.
     # -------------------------------------------------------------------------
-    _ARITHMETIC_PATTERN = re.compile(
-        r'^[0-9.\+\-\*/\s]+$'
-    )
+    _ARITHMETIC_PATTERN = re.compile(r'^[0-9.\+\-\*/\s]+$')
 
     def __init__(self, access_tracking):
         self.access_tracking = access_tracking
@@ -213,36 +199,38 @@ class SectionInterpolation(configparser.Interpolation):
 
             sect = match.group("section") or section
             opt = match.group("option")
+            dflt = match.group("default")
 
-            const = parser.get(sect, opt)  # triggers recursive interpolation
-            self.access_tracking.setdefault((sect, opt), const)
+            try:
+                const = parser.get(sect, opt)  # triggers recursive interpolation
+                self.access_tracking.setdefault((sect, opt), const)
+            except (configparser.NoSectionError, configparser.NoOptionError):
+                # If the key does not exist but a default is provided:
+                if dflt is not None:
+                    const = dflt
+                else:
+                    # No default -> raise exception or handle differently.
+                    raise
 
-            # String replacement
+            # Replacement:
             value = value[: match.start()] + const + value[match.end():]
 
-        # After finishing the normal interpolation, check if the value
-        # can be interpreted as an arithmetic expression
+        # After finishing the normal interpolation, check whether
+        # it's an arithmetic expression.
         value = self._evaluate_arithmetic_if_possible(value)
         return value
 
     def _evaluate_arithmetic_if_possible(self, value):
-        """
-        Checks if 'value' is a simple arithmetic expression consisting of
-        numbers, +, -, *, /, etc. If so, evaluates it and returns the result
-        as a string. Otherwise, returns the original string.
-        """
         test_str = value.strip()
-        # If it doesn't match our (very simple) regex -> not an arithmetic expression
+        # If it doesn't match -> return directly
         if not self._ARITHMETIC_PATTERN.match(test_str):
             return value
 
-        # Evaluate in a restricted namespace
+        # Attempt to evaluate the expression (eval)
         try:
             safe_globals = {"__builtins__": None}
             safe_locals = {}
-
             result = eval(test_str, safe_globals, safe_locals)
-            # If the result is int or float -> return it as string
             if isinstance(result, (int, float)):
                 return str(result)
             else:
@@ -280,7 +268,7 @@ class ConfigFileReader:
         except Exception as e:
             msg = f"Unable to open config file {filename}: {e}"
             logging.exception(msg)
-            raise error(msg)
+            raise error(msg)  # or directly Exception(msg)
         return data.replace('\r\n', '\n')
 
     def build_config_string(self, fileconfig):
@@ -316,7 +304,7 @@ class ConfigFileReader:
         Reads the data into a new configparser instance without handling includes.
         """
         fileconfig = self._create_fileconfig()
-        self.append_fileconfig(fileconfig, data, filename)  
+        self.append_fileconfig(fileconfig, data, filename)
         return fileconfig
 
     def build_fileconfig_with_includes(self, data, filename):
@@ -337,8 +325,8 @@ class ConfigFileReader:
         """
         Calls .get() for every section/option (which triggers interpolation
         and arithmetic evaluation) and writes that result back into the parser
-        via .set(). This overwrites the original raw value (with ${...}) in
-        the config.
+        via .set(). This overwrites the original raw value (with ${...})
+        in the config.
         """
         for section in fileconfig.sections():
             for option in fileconfig.options(section):
@@ -371,14 +359,17 @@ class ConfigFileReader:
 
             def convert_value(value):
                 try:
+                    # Simple True/False check
                     if value.lower() == "true":
                         return True
                     if value.lower() == "false":
                         return False
+                    # Numeric check
                     return int(value) if value.isdigit() else float(value) if "." in value else value
                 except ValueError:
                     return value
 
+            # Dict with "section: ConfigNamespace(...)"
             context = {
                 section: ConfigNamespace({key: convert_value(value) for key, value in fileconfig.items(section)})
                 for section in fileconfig.sections()
@@ -397,32 +388,38 @@ class ConfigFileReader:
             include_path = include_spec
 
         def custom_interpolation(value):
-            # ---------------------------------------------------------------
-            # Another usage of a Regex to handle interpolation in include paths.
-            # key_cre = re.compile(r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}")
-            #
-            # Example lines that might match:
-            #   "[include ${constants.include_path}.cfg]" -> e.g. "include data/my.cfg"
-            #   "[include ${mysection.filename} ]"
-            #   "[include if:${some_cond} my_includes/${constants.file}.cfg]"
-            #
-            # This code replaces ${...} in the include path string with
-            # the already known config values.
-            # ---------------------------------------------------------------
-            key_cre = re.compile(r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}")
+            # Regex including optional default
+            key_cre = re.compile(
+                r"\$\{"
+                r"(?:(?P<section>[^.:${}]+)[.:])?"
+                r"(?P<option>[^${}:]+)"
+                r"(?::(?P<default>[^{}]+))?"
+                r"\}"
+            )
             while True:
                 match = key_cre.search(value)
                 if not match:
                     break
-                section = match.group("section") or "constants"
-                option = match.group("option")
+
+                sect = match.group("section") or "constants"
+                opt = match.group("option")
+                dflt = match.group("default")
+
                 try:
-                    replacement = fileconfig.get(section, option)
-                except (configparser.NoSectionError, configparser.NoOptionError) as e:
-                    raise ValueError(f"Failed to resolve interpolation for '{value}': {e}")
+                    replacement = fileconfig.get(sect, opt)
+                except (configparser.NoSectionError, configparser.NoOptionError):
+                    if dflt is not None:
+                        replacement = dflt
+                    else:
+                        raise ValueError(
+                            f"Failed to resolve interpolation for '{value}' - "
+                            f"'{sect}.{opt}' not found and no default provided."
+                        )
+
                 value = value[: match.start()] + replacement + value[match.end():]
             return value
 
+        # Before processing the path further, resolve interpolation
         try:
             include_path = custom_interpolation(include_path)
         except ValueError as e:
@@ -432,13 +429,13 @@ class ConfigFileReader:
         dirname = os.path.dirname(source_filename)
         include_path = os.path.join(dirname, include_path)
 
-        # Normalize Path
+        # Normalize
         include_path = os.path.abspath(include_path)
 
         include_filenames = glob.glob(include_path, recursive=True)
         if not include_filenames and not glob.has_magic(include_path):
             raise error(f"Include file '{include_path}' does not exist")
-        
+
         include_filenames.sort()
         for include_filename in include_filenames:
             include_data = self.read_config_file(include_filename)
@@ -454,22 +451,17 @@ class ConfigFileReader:
         lines = data.split('\n')
         buf = []
         pending_includes = []
+
         for line in lines:
             # Remove inline comments
             pos = line.find('#')
             if pos >= 0:
                 line = line[:pos]
+
             mo = configparser.RawConfigParser.SECTCRE.match(line)
             header = mo and mo.group('header')
-            # -----------------------------------------------------------------
-            # "[include something]" lines: configparser's SECTCRE matches
-            # something like "[include ...]" as a 'section header'.
-            #
-            # Example:
-            #   [include my_other_file.cfg]
-            #   [include ${constants.other_file}]
-            #   [include if:${mysection.condition} path/to/include]
-            # -----------------------------------------------------------------
+
+            # "[include xyz]" is recognized as a SECTION - we skip it here
             if header and header.startswith('include '):
                 include_spec = header[8:].strip()
                 pending_includes.append(include_spec)
@@ -485,12 +477,11 @@ class ConfigFileReader:
             if result:
                 unresolved_includes.append(result)
 
-        # Retry if there are unresolved includes
+        # If something returns, try again
         for include_spec in unresolved_includes:
             self._resolve_include(filename, include_spec, fileconfig, visited)
 
         visited.remove(path)
-
 ######################################################################
 # Config auto save helper
 ######################################################################
