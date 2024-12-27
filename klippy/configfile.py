@@ -146,7 +146,7 @@ class ConfigWrapper:
 class SectionInterpolation(configparser.Interpolation):
     """
     Variable interpolation of the form ${[section.]option[:default_value]}
-    and evaluating arithmetic expressions if applicable, including min and max operations.
+    and evaluating arithmetic expressions if applicable, including min, max, abs, and round operations.
     """
 
     # -------------------------------------------------------------------------
@@ -178,9 +178,9 @@ class SectionInterpolation(configparser.Interpolation):
 
     # -------------------------------------------------------------------------
     # _ARITHMETIC_PATTERN: Detects (potentially) pure arithmetic expressions,
-    # including min and max operations.
+    # including min, max, abs, and round operations.
     # -------------------------------------------------------------------------
-    _ARITHMETIC_PATTERN = re.compile(r'^[0-9.\+\-\*/\s]+$|^min\(.+\)$|^max\(.+\)$')
+    _ARITHMETIC_PATTERN = re.compile(r'^[0-9.\+\-\*/\s]+$|^min\(.+\)$|^max\(.+\)$|^abs\(.+\)$|^round\(.+\)$')
 
     def __init__(self, access_tracking):
         self.access_tracking = access_tracking
@@ -227,7 +227,7 @@ class SectionInterpolation(configparser.Interpolation):
         if not self._ARITHMETIC_PATTERN.match(test_str):
             return value
 
-        # Attempt to evaluate the expression (eval or custom min/max)
+        # Attempt to evaluate the expression (eval or custom operations)
         try:
             if test_str.startswith("min(") and test_str.endswith(")"):
                 args = self._extract_args(test_str[4:-1])
@@ -235,6 +235,12 @@ class SectionInterpolation(configparser.Interpolation):
             elif test_str.startswith("max(") and test_str.endswith(")"):
                 args = self._extract_args(test_str[4:-1])
                 result = max(args)
+            elif test_str.startswith("abs(") and test_str.endswith(")"):
+                args = self._extract_args(test_str[4:-1], single=True)
+                result = abs(args[0])
+            elif test_str.startswith("round(") and test_str.endswith(")"):
+                args = self._extract_args(test_str[6:-1], single=True)
+                result = round(args[0])
             else:
                 safe_globals = {"__builtins__": None}
                 safe_locals = {}
@@ -248,15 +254,17 @@ class SectionInterpolation(configparser.Interpolation):
             logging.debug(f"Arithmetic evaluation failed for '{value}': {e}")
             return value
 
-    def _extract_args(self, arg_string):
-        """Extract arguments for min/max functions."""
+    def _extract_args(self, arg_string, single=False):
+        """Extract arguments for operations like min, max, abs, and round."""
         args = []
         for part in arg_string.split(','):
             part = part.strip()
             if self._ARITHMETIC_PATTERN.match(part):
                 args.append(float(self._evaluate_arithmetic_if_possible(part)))
             else:
-                raise ValueError(f"Invalid argument '{part}' for min/max operation.")
+                raise ValueError(f"Invalid argument '{part}' for operation.")
+        if single and len(args) != 1:
+            raise ValueError(f"Operation expected a single argument but got {len(args)}.")
         return args
 
 
