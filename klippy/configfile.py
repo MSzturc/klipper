@@ -146,7 +146,7 @@ class ConfigWrapper:
 class SectionInterpolation(configparser.Interpolation):
     """
     Variable interpolation of the form ${[section.]option[:default_value]}
-    and evaluating arithmetic expressions if applicable.
+    and evaluating arithmetic expressions if applicable, including min and max operations.
     """
 
     # -------------------------------------------------------------------------
@@ -172,14 +172,15 @@ class SectionInterpolation(configparser.Interpolation):
         r"\$\{"
         r"(?:(?P<section>[^.:${}]+)[.:])?"
         r"(?P<option>[^${}:]+)"
-        r"(?::(?P<default>[^{}]+))?"
+        r"(?:\:(?P<default>[^{}]+))?"
         r"\}"
     )
 
     # -------------------------------------------------------------------------
-    # _ARITHMETIC_PATTERN: Detects (potentially) pure arithmetic expressions.
+    # _ARITHMETIC_PATTERN: Detects (potentially) pure arithmetic expressions,
+    # including min and max operations.
     # -------------------------------------------------------------------------
-    _ARITHMETIC_PATTERN = re.compile(r'^[0-9.\+\-\*/\s]+$')
+    _ARITHMETIC_PATTERN = re.compile(r'^[0-9.\+\-\*/\s]+$|^min\(.+\)$|^max\(.+\)$')
 
     def __init__(self, access_tracking):
         self.access_tracking = access_tracking
@@ -226,11 +227,19 @@ class SectionInterpolation(configparser.Interpolation):
         if not self._ARITHMETIC_PATTERN.match(test_str):
             return value
 
-        # Attempt to evaluate the expression (eval)
+        # Attempt to evaluate the expression (eval or custom min/max)
         try:
-            safe_globals = {"__builtins__": None}
-            safe_locals = {}
-            result = eval(test_str, safe_globals, safe_locals)
+            if test_str.startswith("min(") and test_str.endswith(")"):
+                args = self._extract_args(test_str[4:-1])
+                result = min(args)
+            elif test_str.startswith("max(") and test_str.endswith(")"):
+                args = self._extract_args(test_str[4:-1])
+                result = max(args)
+            else:
+                safe_globals = {"__builtins__": None}
+                safe_locals = {}
+                result = eval(test_str, safe_globals, safe_locals)
+
             if isinstance(result, (int, float)):
                 return str(result)
             else:
@@ -238,6 +247,17 @@ class SectionInterpolation(configparser.Interpolation):
         except Exception as e:
             logging.debug(f"Arithmetic evaluation failed for '{value}': {e}")
             return value
+
+    def _extract_args(self, arg_string):
+        """Extract arguments for min/max functions."""
+        args = []
+        for part in arg_string.split(','):
+            part = part.strip()
+            if self._ARITHMETIC_PATTERN.match(part):
+                args.append(float(self._evaluate_arithmetic_if_possible(part)))
+            else:
+                raise ValueError(f"Invalid argument '{part}' for min/max operation.")
+        return args
 
 
 class ConfigNamespace:
@@ -393,7 +413,7 @@ class ConfigFileReader:
                 r"\$\{"
                 r"(?:(?P<section>[^.:${}]+)[.:])?"
                 r"(?P<option>[^${}:]+)"
-                r"(?::(?P<default>[^{}]+))?"
+                r"(?:\:(?P<default>[^{}]+))?"
                 r"\}"
             )
             while True:
