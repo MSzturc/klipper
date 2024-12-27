@@ -612,7 +612,14 @@ class BDsensorEndstopWrapper:
         pin = config.get('sda_pin')
         pin_params = ppins.lookup_pin(pin, can_invert=False, can_pullup=True)
         mcu = pin_params['chip']
-        self.sda_pin_num = pin_params['pin']
+        mcu_name = pin_params['chip_name']
+        pin_resolver = ppins.get_pin_resolver(mcu_name)
+
+        if pin_params['pin'] in pin_resolver.aliases:
+            self.sda_pin_num = pin_resolver.aliases[pin_params['pin']]
+        else:
+            self.sda_pin_num = pin_params['pin']
+
         self.mcu = mcu
         # print("b2:%s"%mcu)
         pin_s = []
@@ -626,7 +633,15 @@ class BDsensorEndstopWrapper:
             pass
         pin_params = ppins.lookup_pin(pin_s, can_invert=False, can_pullup=True)
         mcu = pin_params['chip']
-        scl_pin_num = pin_params['pin']
+        mcu_name = pin_params['chip_name']
+
+        pin_resolver = ppins.get_pin_resolver(mcu_name)
+
+        if pin_params['pin'] in pin_resolver.aliases:
+            scl_pin_num = pin_resolver.aliases[pin_params['pin']]
+        else:
+            scl_pin_num = pin_params['pin']
+
         # print("b3:%s"%mcu)
         # pin_params['pullup']=2
         # self.mcu_endstop = mcu.setup_pin('endstop', pin_params)
