@@ -432,6 +432,9 @@ class ConfigFileReader:
         dirname = os.path.dirname(source_filename)
         include_path = os.path.join(dirname, include_path)
 
+        # Normalize Path
+        include_path = os.path.abspath(include_path)
+
         include_filenames = glob.glob(include_path, recursive=True)
         if not include_filenames and not glob.has_magic(include_path):
             raise error(f"Include file '{include_path}' does not exist")
