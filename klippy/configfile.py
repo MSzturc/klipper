@@ -15,37 +15,6 @@ error = configparser.Error
 class sentinel:
     pass
 
-class SectionInterpolation(configparser.Interpolation):
-    """
-    variable interpolation replacing ${[section.]option}
-    """
-
-    _KEYCRE = re.compile(
-        r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}"
-    )
-
-    def __init__(self, access_tracking):
-        self.access_tracking = access_tracking
-
-    def before_get(self, parser, section, option, value, defaults):
-        depth = configparser.MAX_INTERPOLATION_DEPTH
-        while depth:
-            depth -= 1
-
-            match = self._KEYCRE.search(value)
-            if not match:
-                break
-
-            sect = match.group("section") or section
-            opt = match.group("option")
-
-            const = parser.get(sect, opt)
-            self.access_tracking.setdefault((sect, opt), const)
-
-            value = value[: match.start()] + const + value[match.end() :]
-
-        return value
-
 class ConfigWrapper:
     error = configparser.Error
     def __init__(self, printer, fileconfig, access_tracking, section):
@@ -174,8 +143,120 @@ class ConfigWrapper:
 ######################################################################
 # Config file parsing (with include file support)
 ######################################################################
+class SectionInterpolation(configparser.Interpolation):
+    """
+    Variable interpolation replacing ${[section.]option}
+    and evaluating arithmetic expressions if applicable.
+    """
+
+    # -------------------------------------------------------------------------
+    # _KEYCRE: Matches interpolation variables of the form ${[section.]option}
+    #
+    # Examples for config lines where _KEYCRE is used:
+    #   result = ${constants.value} + 15
+    #   host = ${db.host}
+    #   port = ${port}  (uses current/implicit section if not specified)
+    #
+    # Explanation:
+    #   - (?:(?P<section>[^.:${}]+)[.:])? : optionally captures a section name
+    #     (stopping at '.', ':', '{', '}' or '$') and then a dot or colon.
+    #   - (?P<option>[^${}]+) : captures the option name until a '{' or '}' or '$'.
+    #
+    # Usage in code:
+    #   1) "before_get" method searches for matches in value with _KEYCRE.
+    #   2) If found, it retrieves that config value and replaces it in the string.
+    # -------------------------------------------------------------------------
+    _KEYCRE = re.compile(
+        r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}"
+    )
+
+    # -------------------------------------------------------------------------
+    # _ARITHMETIC_PATTERN: Detects whether a string is (potentially) a pure
+    # arithmetic expression consisting of digits, decimal points, +, -, *, /,
+    # and whitespace. Does NOT allow parentheses, exponentiation, etc.
+    #
+    # Examples that match this pattern:
+    #   "15 + 20"
+    #   "3.14 * 2"
+    #   "10 - 5 * 2"
+    #   "  42 /  6 "
+    #
+    # Examples that do NOT match (would return None):
+    #   "hello world"
+    #   "3**2"        (# not allowed in the pattern)
+    #   "2 + a"       (# 'a' is not a digit)
+    #
+    # Usage in code:
+    #   1) After interpolation resolves, we check if the final string
+    #      matches _ARITHMETIC_PATTERN. If yes, we try to eval it as a
+    #      simple arithmetic expression.
+    # -------------------------------------------------------------------------
+    _ARITHMETIC_PATTERN = re.compile(
+        r'^[0-9.\+\-\*/\s]+$'
+    )
+
+    def __init__(self, access_tracking):
+        self.access_tracking = access_tracking
+
+    def before_get(self, parser, section, option, value, defaults):
+        """
+        1) Replaces ${...} placeholders with their corresponding values.
+        2) Checks if the resulting string is an arithmetic expression
+           and, if so, evaluates it.
+        """
+        depth = configparser.MAX_INTERPOLATION_DEPTH
+        while depth:
+            depth -= 1
+            match = self._KEYCRE.search(value)
+            if not match:
+                break
+
+            sect = match.group("section") or section
+            opt = match.group("option")
+
+            const = parser.get(sect, opt)  # triggers recursive interpolation
+            self.access_tracking.setdefault((sect, opt), const)
+
+            # String replacement
+            value = value[: match.start()] + const + value[match.end():]
+
+        # After finishing the normal interpolation, check if the value
+        # can be interpreted as an arithmetic expression
+        value = self._evaluate_arithmetic_if_possible(value)
+        return value
+
+    def _evaluate_arithmetic_if_possible(self, value):
+        """
+        Checks if 'value' is a simple arithmetic expression consisting of
+        numbers, +, -, *, /, etc. If so, evaluates it and returns the result
+        as a string. Otherwise, returns the original string.
+        """
+        test_str = value.strip()
+        # If it doesn't match our (very simple) regex -> not an arithmetic expression
+        if not self._ARITHMETIC_PATTERN.match(test_str):
+            return value
+
+        # Evaluate in a restricted namespace
+        try:
+            safe_globals = {"__builtins__": None}
+            safe_locals = {}
+
+            result = eval(test_str, safe_globals, safe_locals)
+            # If the result is int or float -> return it as string
+            if isinstance(result, (int, float)):
+                return str(result)
+            else:
+                return value
+        except Exception as e:
+            logging.debug(f"Arithmetic evaluation failed for '{value}': {e}")
+            return value
+
 
 class ConfigNamespace:
+    """
+    Helper class for conditionals: creates an object from
+    section keys -> accessible via dot notation.
+    """
     def __init__(self, data):
         for key, value in data.items():
             setattr(self, key, value)
@@ -186,7 +267,12 @@ class ConfigNamespace:
     def __repr__(self):
         return str(self.__dict__)
 
+
 class ConfigFileReader:
+    """
+    Main class to read the config file, handle includes, and perform interpolation.
+    """
+
     def read_config_file(self, filename):
         try:
             with open(filename, 'r') as f:
@@ -205,7 +291,6 @@ class ConfigFileReader:
     def append_fileconfig(self, fileconfig, data, filename):
         if not data:
             return
-        # Strip trailing comments
         lines = data.split('\n')
         for i, line in enumerate(lines):
             pos = line.find('#')
@@ -227,34 +312,69 @@ class ConfigFileReader:
         return fileconfig
 
     def build_fileconfig(self, data, filename):
+        """
+        Reads the data into a new configparser instance without handling includes.
+        """
         fileconfig = self._create_fileconfig()
         self.append_fileconfig(fileconfig, data, filename)  
         return fileconfig
 
+    def build_fileconfig_with_includes(self, data, filename):
+        """
+        Reads the data (including includes) into a configparser instance.
+        Then it expands all (interpolated) values so that build_config_string()
+        shows the final values without any ${...} placeholders.
+        """
+        fileconfig = self._create_fileconfig()
+        self._parse_config(data, filename, fileconfig, set())
+
+        # Expand all values so that the internal storage no longer has raw placeholders.
+        self._expand_all_values(fileconfig)
+
+        return fileconfig
+
+    def _expand_all_values(self, fileconfig):
+        """
+        Calls .get() for every section/option (which triggers interpolation
+        and arithmetic evaluation) and writes that result back into the parser
+        via .set(). This overwrites the original raw value (with ${...}) in
+        the config.
+        """
+        for section in fileconfig.sections():
+            for option in fileconfig.options(section):
+                val = fileconfig.get(section, option)  # triggers interpolation
+                fileconfig.set(section, option, val)   # overwrites the raw value
+
     def _resolve_include(self, source_filename, include_spec, fileconfig, visited):
         """
-        Resolve includes with support for interpolation and conditions.
         Supports:
         - [include def.cfg]
         - [include ${constants.macro}.cfg]
         - [include if:${expression} path/to/include]
         - [include if:${expression} ${macro}.cfg]
+
+        Regex used here:
+          condition_match = re.match(r"if:\$\{(.+)\}\s+(.*)", include_spec)
+
+        Examples for 'include_spec' lines that match condition_match:
+          "if:${constants.some_condition} config-extra.cfg"
+          "if:${mysection.enable_feature} path/to/include"
+
+        Explanation:
+          - "if:\$\{(.+)\}\s+(.*)"
+            Group(1) captures whatever is inside ${...},
+            Group(2) is the path to the included file.
         """
-        # Check for conditional includes in the format:
-        # [include if:${expression} path/to/include]
         condition_match = re.match(r"if:\$\{(.+)\}\s+(.*)", include_spec)
         if condition_match:
             expression, include_path = condition_match.groups()
 
-            # Prepare the context with proper type conversion
             def convert_value(value):
                 try:
-                    # Convert boolean-like strings
                     if value.lower() == "true":
                         return True
                     if value.lower() == "false":
                         return False
-                    # Convert to int or float if possible, otherwise keep as string
                     return int(value) if value.isdigit() else float(value) if "." in value else value
                 except ValueError:
                     return value
@@ -265,7 +385,6 @@ class ConfigFileReader:
             }
 
             try:
-                # Use eval safely with a restricted context
                 condition_result = eval(expression, {"__builtins__": None}, context)
             except Exception as e:
                 logging.warning(f"Failed to evaluate condition '{expression}': {e}")
@@ -277,23 +396,31 @@ class ConfigFileReader:
         else:
             include_path = include_spec
 
-        # Custom interpolation to resolve ${...} placeholders
         def custom_interpolation(value):
+            # ---------------------------------------------------------------
+            # Another usage of a Regex to handle interpolation in include paths.
+            # key_cre = re.compile(r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}")
+            #
+            # Example lines that might match:
+            #   "[include ${constants.include_path}.cfg]" -> e.g. "include data/my.cfg"
+            #   "[include ${mysection.filename} ]"
+            #   "[include if:${some_cond} my_includes/${constants.file}.cfg]"
+            #
+            # This code replaces ${...} in the include path string with
+            # the already known config values.
+            # ---------------------------------------------------------------
             key_cre = re.compile(r"\$\{(?:(?P<section>[^.:${}]+)[.:])?(?P<option>[^${}]+)\}")
             while True:
                 match = key_cre.search(value)
                 if not match:
                     break
-
                 section = match.group("section") or "constants"
                 option = match.group("option")
-
                 try:
                     replacement = fileconfig.get(section, option)
                 except (configparser.NoSectionError, configparser.NoOptionError) as e:
                     raise ValueError(f"Failed to resolve interpolation for '{value}': {e}")
-
-                value = value[: match.start()] + replacement + value[match.end() :]
+                value = value[: match.start()] + replacement + value[match.end():]
             return value
 
         try:
@@ -320,43 +447,46 @@ class ConfigFileReader:
         if path in visited:
             raise error(f"Recursive include of config file '{filename}'")
         visited.add(path)
+
         lines = data.split('\n')
-        # Buffer lines between includes and parse as a unit so that overrides
-        # in includes apply linearly as they do within a single file
         buf = []
         pending_includes = []
         for line in lines:
-            # Strip trailing comment
+            # Remove inline comments
             pos = line.find('#')
             if pos >= 0:
                 line = line[:pos]
-            # Process include or buffer line
             mo = configparser.RawConfigParser.SECTCRE.match(line)
             header = mo and mo.group('header')
+            # -----------------------------------------------------------------
+            # "[include something]" lines: configparser's SECTCRE matches
+            # something like "[include ...]" as a 'section header'.
+            #
+            # Example:
+            #   [include my_other_file.cfg]
+            #   [include ${constants.other_file}]
+            #   [include if:${mysection.condition} path/to/include]
+            # -----------------------------------------------------------------
             if header and header.startswith('include '):
                 include_spec = header[8:].strip()
                 pending_includes.append(include_spec)
             else:
                 buf.append(line)
-        # Parse buffered lines to set up initial sections
+
         self.append_fileconfig(fileconfig, '\n'.join(buf), filename)
-        # Process pending includes
+
+        # Resolve includes
         unresolved_includes = []
         for include_spec in pending_includes:
             result = self._resolve_include(filename, include_spec, fileconfig, visited)
             if result:
                 unresolved_includes.append(result)
-        # Retry unresolved includes
+
+        # Retry if there are unresolved includes
         for include_spec in unresolved_includes:
             self._resolve_include(filename, include_spec, fileconfig, visited)
+
         visited.remove(path)
-
-    def build_fileconfig_with_includes(self, data, filename):
-        fileconfig = self._create_fileconfig()
-        self._parse_config(data, filename, fileconfig, set())
-        return fileconfig
-
-
 
 ######################################################################
 # Config auto save helper
