@@ -203,8 +203,10 @@ class SectionInterpolation(configparser.Interpolation):
             dflt = match.group("default")
 
             try:
-                const = parser.get(sect, opt)  # triggers recursive interpolation
-                self.access_tracking.setdefault((sect, opt), const)
+                if (sect, opt) in self.access_tracking:
+                    const = self.access_tracking[(sect, opt)]  # Return the already set value
+                else:
+                    const = parser.get(sect, opt)  # triggers recursive interpolation
             except (configparser.NoSectionError, configparser.NoOptionError):
                 # If the key does not exist but a default is provided:
                 if dflt is not None:
@@ -219,6 +221,7 @@ class SectionInterpolation(configparser.Interpolation):
         # After finishing the normal interpolation, check whether
         # it's an arithmetic expression.
         value = self._evaluate_arithmetic_if_possible(value)
+        self.access_tracking.setdefault((section, option), value)
         return value
 
     def _evaluate_arithmetic_if_possible(self, value):
@@ -313,7 +316,7 @@ class ConfigFileReader:
             if pos >= 0:
                 lines[i] = line[:pos]
         sbuffer = io.StringIO('\n'.join(lines))
-        
+
         # Temporären Parser erzeugen
         temp_fileconfig = configparser.RawConfigParser(
             strict=False,
