@@ -379,7 +379,7 @@ class ProbeOffsetsHelper:
 # Helper code that can probe a series of points and report the
 # position at each point.
 class ProbePointsHelper:
-    def __init__(self, config, finalize_callback, default_points=None):
+    def __init__(self, config, finalize_callback, default_points=None, use_offsets=False):
         # Initialize ProbePointsHelper with configuration and callback.
         self.printer = config.get_printer()
         self.finalize_callback = finalize_callback
@@ -394,7 +394,9 @@ class ProbePointsHelper:
         def_move_z = config.getfloat('horizontal_move_z', 5.0)
         self.default_horizontal_move_z = def_move_z
         self.speed = config.getfloat('speed', 50.0, above=0.0)
-        self.use_offsets = False
+        self.use_offsets = config.getboolean(
+            "use_probe_xy_offsets", use_offsets
+        )
 
         # Internal probing state
         self.lift_speed = self.speed

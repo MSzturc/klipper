@@ -40,3 +40,4 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Added abs/round operation to ArithmeticParser
 - Added proper logging for homing procedure
 - Added value overrides in ConfigParser
+- Probe: implement use_probe_xy_offsets - https://github.com/KalicoCrew/kalico/pull/500

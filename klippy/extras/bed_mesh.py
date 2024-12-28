@@ -819,8 +819,7 @@ class ProbeManager:
         self.base_points = []
         self.substitutes = collections.OrderedDict()
         self.is_round = orig_config["radius"] is not None
-        self.probe_helper = probe.ProbePointsHelper(config, finalize_cb, [])
-        self.probe_helper.use_xy_offsets(True)
+        self.probe_helper = probe.ProbePointsHelper(config, finalize_cb, [],use_offsets=True)
         self.rapid_scan_helper = RapidScanHelper(config, self, finalize_cb)
         self._init_faulty_regions(config)
 
