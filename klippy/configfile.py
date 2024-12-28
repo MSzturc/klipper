@@ -313,10 +313,29 @@ class ConfigFileReader:
             if pos >= 0:
                 lines[i] = line[:pos]
         sbuffer = io.StringIO('\n'.join(lines))
+        
+        # Temporären Parser erzeugen
+        temp_fileconfig = configparser.RawConfigParser(
+            strict=False,
+            inline_comment_prefixes=(";", "#"),
+            interpolation=fileconfig._interpolation,  # Wichtig: selbe Interpolation übernehmen
+        )
+
+        # In den temporären Parser einlesen
         if sys.version_info.major >= 3:
-            fileconfig.read_file(sbuffer, filename)
+            temp_fileconfig.read_file(sbuffer, filename)
         else:
-            fileconfig.readfp(sbuffer, filename)
+            temp_fileconfig.readfp(sbuffer, filename)
+
+        # Jetzt mergen wir die Werte aus dem "temp_fileconfig"
+        # nur dann in "fileconfig", wenn dort noch nichts gesetzt ist.
+        for section in temp_fileconfig.sections():
+            if not fileconfig.has_section(section):
+                fileconfig.add_section(section)
+            for option in temp_fileconfig.options(section):
+                if not fileconfig.has_option(section, option):
+                    val = temp_fileconfig.get(section, option)
+                    fileconfig.set(section, option, val)
 
     def _create_fileconfig(self):
         access_tracking = {}
