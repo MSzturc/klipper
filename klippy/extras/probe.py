@@ -380,109 +380,144 @@ class ProbeOffsetsHelper:
 # position at each point.
 class ProbePointsHelper:
     def __init__(self, config, finalize_callback, default_points=None):
+        # Initialize ProbePointsHelper with configuration and callback.
         self.printer = config.get_printer()
         self.finalize_callback = finalize_callback
         self.probe_points = default_points
         self.name = config.get_name()
         self.gcode = self.printer.lookup_object('gcode')
-        # Read config settings
+
+        # Read configuration settings
         if default_points is None or config.get('points', None) is not None:
             self.probe_points = config.getlists('points', seps=(',', '\n'),
                                                 parser=float, count=2)
-        def_move_z = config.getfloat('horizontal_move_z', 5.)
+        def_move_z = config.getfloat('horizontal_move_z', 5.0)
         self.default_horizontal_move_z = def_move_z
-        self.speed = config.getfloat('speed', 50., above=0.)
+        self.speed = config.getfloat('speed', 50.0, above=0.0)
         self.use_offsets = False
+
         # Internal probing state
         self.lift_speed = self.speed
-        self.probe_offsets = (0., 0., 0.)
+        self.probe_offsets = (0.0, 0.0, 0.0)
         self.manual_results = []
-    def minimum_points(self,n):
+        logging.info(f"ProbePointsHelper initialized for {self.name}.")
+
+    def minimum_points(self, n):
+        # Ensure minimum number of probe points are available.
         if len(self.probe_points) < n:
-            raise self.printer.config_error(
-                "Need at least %d probe points for %s" % (n, self.name))
+            error_message = f"Need at least {n} probe points for {self.name}"
+            logging.error(error_message)
+            raise self.printer.config_error(error_message)
+
     def update_probe_points(self, points, min_points):
+        # Update the list of probe points and validate.
         self.probe_points = points
         self.minimum_points(min_points)
+        logging.debug(f"Probe points updated: {self.probe_points}")
+
     def use_xy_offsets(self, use_offsets):
+        # Set whether XY offsets should be applied.
         self.use_offsets = use_offsets
+        logging.debug(f"XY offsets usage set to: {self.use_offsets}")
+
     def get_lift_speed(self):
+        # Retrieve the current lift speed.
         return self.lift_speed
+
     def _move(self, coord, speed):
+        # Move the toolhead to the specified coordinates at the given speed.
+        logging.debug(f"Moving to {coord} at speed {speed}")
         self.printer.lookup_object('toolhead').manual_move(coord, speed)
+
     def _raise_tool(self, is_first=False):
-        speed = self.lift_speed
-        if is_first:
-            # Use full speed to first probe position
-            speed = self.speed
+        # Raise the toolhead to the horizontal move height.
+        speed = self.lift_speed if not is_first else self.speed
+        logging.debug(f"Raising tool to horizontal move height {self.horizontal_move_z} at speed {speed}")
         self._move([None, None, self.horizontal_move_z], speed)
+
     def _invoke_callback(self, results):
-        # Flush lookahead queue
+        # Invoke the finalize callback with probing results.
         toolhead = self.printer.lookup_object('toolhead')
-        toolhead.get_last_move_time()
-        # Invoke callback
+        toolhead.get_last_move_time()  # Flush lookahead queue
+        logging.debug(f"Invoking callback with results: {results}")
         res = self.finalize_callback(self.probe_offsets, results)
         return res != "retry"
+
     def _move_next(self, probe_num):
-        # Move to next XY probe point
+        # Move to the next XY probe point.
         nextpos = list(self.probe_points[probe_num])
         if self.use_offsets:
             nextpos[0] -= self.probe_offsets[0]
             nextpos[1] -= self.probe_offsets[1]
+        logging.debug(f"Moving to next probe point: {nextpos}")
         self._move(nextpos, self.speed)
+
     def start_probe(self, gcmd):
+        # Start the probing process.
+        logging.info("Starting probe sequence.")
         manual_probe.verify_no_manual_probe(self.printer)
-        # Lookup objects
+
+        # Lookup probe object and method
         probe = self.printer.lookup_object('probe', None)
         method = gcmd.get('METHOD', 'automatic').lower()
-        def_move_z = self.default_horizontal_move_z
         self.horizontal_move_z = gcmd.get_float('HORIZONTAL_MOVE_Z',
-                                                def_move_z)
+                                                self.default_horizontal_move_z)
         if probe is None or method == 'manual':
-            # Manual probe
+            logging.info("Using manual probing method.")
             self.lift_speed = self.speed
-            self.probe_offsets = (0., 0., 0.)
+            self.probe_offsets = (0.0, 0.0, 0.0)
             self.manual_results = []
             self._manual_probe_start()
             return
-        # Perform automatic probing
+
+        # Automatic probing setup
         self.lift_speed = probe.get_probe_params(gcmd)['lift_speed']
         self.probe_offsets = probe.get_offsets()
         if self.horizontal_move_z < self.probe_offsets[2]:
-            raise gcmd.error("horizontal_move_z can't be less than"
-                             " probe's z_offset")
+            error_message = "horizontal_move_z can't be less than probe's z_offset"
+            logging.error(error_message)
+            raise gcmd.error(error_message)
+
         probe_session = probe.start_probe_session(gcmd)
         probe_num = 0
-        while 1:
+        while True:
             self._raise_tool(not probe_num)
             if probe_num >= len(self.probe_points):
                 results = probe_session.pull_probed_results()
+                logging.debug(f"Probing results: {results}")
                 done = self._invoke_callback(results)
                 if done:
                     break
-                # Caller wants a "retry" - restart probing
-                probe_num = 0
+                probe_num = 0  # Retry probing
             self._move_next(probe_num)
             probe_session.run_probe(gcmd)
             probe_num += 1
         probe_session.end_probe_session()
+        logging.info("Probe sequence complete.")
+
     def _manual_probe_start(self):
+        # Start manual probing sequence.
+        logging.info("Starting manual probing sequence.")
         self._raise_tool(not self.manual_results)
         if len(self.manual_results) >= len(self.probe_points):
             done = self._invoke_callback(self.manual_results)
             if done:
                 return
-            # Caller wants a "retry" - clear results and restart probing
+            logging.info("Retrying manual probing sequence.")
             self.manual_results = []
         self._move_next(len(self.manual_results))
         gcmd = self.gcode.create_gcode_command("", "", {})
-        manual_probe.ManualProbeHelper(self.printer, gcmd,
-                                       self._manual_probe_finalize)
+        manual_probe.ManualProbeHelper(self.printer, gcmd, self._manual_probe_finalize)
+
     def _manual_probe_finalize(self, kin_pos):
+        # Finalize a manual probe point.
         if kin_pos is None:
+            logging.debug("No kinematic position provided during manual probe finalize.")
             return
         self.manual_results.append(kin_pos)
+        logging.debug(f"Manual probe point added: {kin_pos}")
         self._manual_probe_start()
+
 
 # Helper to obtain a single probe measurement
 def run_single_probe(probe, gcmd):
