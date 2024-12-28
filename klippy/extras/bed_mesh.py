@@ -639,6 +639,7 @@ class BedMeshCalibrate:
         }
     cmd_BED_MESH_CALIBRATE_help = "Perform Mesh Bed Leveling"
     def cmd_BED_MESH_CALIBRATE(self, gcmd):
+        logging.info("BED_MESH_CALIBRATE started!")
         self._profile_name = gcmd.get('PROFILE', "default")
         if not self._profile_name.strip():
             raise gcmd.error("Value for parameter 'PROFILE' must be specified")
@@ -648,6 +649,7 @@ class BedMeshCalibrate:
         except BedMeshError as e:
             raise gcmd.error(str(e))
         self.probe_mgr.start_probe(gcmd)
+        logging.info("BED_MESH_CALIBRATE finished!")
     def probe_finalize(self, offsets, positions):
         z_offset = offsets[2]
         positions = [[round(p[0], 2), round(p[1], 2), p[2]]
