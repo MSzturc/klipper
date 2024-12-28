@@ -29,3 +29,14 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - bugfix Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486
 - Added Before Restart Hook
 - Added [auto_reload] Module to detect changes in printer.cfg and automatically call RELOAD_GCODE_MACROS
+- Added Autotuning for Stepper Drivers bassed on TMC Spreadsheets
+- Added option to reference variable in [include] statements
+- Added conditional includes
+- Added evaluation of arithmetic expressions in printer.cfg
+- Added BDSensor as part of Klipper - https://github.com/markniu/Bed_Distance_sensor
+- Fixed Alias pins lookup for Probes
+- Added default values to ConfigParser
+- Added min/max operation to ArithmeticParser
+- Added abs/round operation to ArithmeticParser
+- Added proper logging for homing procedure
+- Added value overrides in ConfigParser
