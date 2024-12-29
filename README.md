@@ -45,3 +45,4 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - GCODE: adds LOG_ROLLOVER gcode command to trigger a log rollover - https://github.com/KalicoCrew/kalico/pull/498
 - Added RESET_VELOCITY_LIMIT command to reset velocity limits - https://github.com/KalicoCrew/kalico/pull/472
 - Add TMC5160 short_conf - https://github.com/KalicoCrew/kalico/pull/444
+- Add initial_speed value for fans - https://github.com/KalicoCrew/kalico/pull/436

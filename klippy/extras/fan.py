@@ -17,6 +17,10 @@ class Fan:
         self.off_below = config.getfloat('off_below', default=None,
                                          minval=0., maxval=1.)
         
+        self.initial_speed = config.getfloat(
+            "initial_speed", default=None, minval=0.0, maxval=1.0
+        )
+        
         if self.min_power is not None and self.off_below is not None:
             raise config.error(
                 "min_power and off_below are both set. Remove one!"
@@ -63,6 +67,8 @@ class Fan:
         # Register callbacks
         self.printer.register_event_handler("gcode:request_restart",
                                             self._handle_request_restart)
+        
+        self.printer.register_event_handler("klippy:ready", self._handle_ready)
 
     def get_mcu(self):
         return self.mcu_fan.get_mcu()
@@ -97,6 +103,9 @@ class Fan:
         self.gcrq.queue_gcode_request(value)
     def _handle_request_restart(self, print_time):
         self.set_speed(0., print_time)
+    def _handle_ready(self):
+        if self.initial_speed:
+            self.set_speed_from_command(self.initial_speed)
 
     def get_status(self, eventtime):
         tachometer_status = self.tachometer.get_status(eventtime)
