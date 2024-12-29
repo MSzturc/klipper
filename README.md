@@ -46,3 +46,4 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Added RESET_VELOCITY_LIMIT command to reset velocity limits - https://github.com/KalicoCrew/kalico/pull/472
 - Add TMC5160 short_conf - https://github.com/KalicoCrew/kalico/pull/444
 - Add initial_speed value for fans - https://github.com/KalicoCrew/kalico/pull/436
+- Add jinja2's loopcontrols extension - https://github.com/KalicoCrew/kalico/pull/442
