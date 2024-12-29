@@ -48,3 +48,4 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Add initial_speed value for fans - https://github.com/KalicoCrew/kalico/pull/436
 - Add jinja2's loopcontrols extension - https://github.com/KalicoCrew/kalico/pull/442
 - Revert speed for UI compatibility - https://github.com/KalicoCrew/kalico/pull/428
+- Accept ACCEL_PER_HZ in TEST_RESONANCES - https://github.com/KalicoCrew/kalico/pull/312
