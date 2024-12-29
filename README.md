@@ -43,3 +43,4 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Probe: implement use_probe_xy_offsets - https://github.com/KalicoCrew/kalico/pull/500
 - MCU: expose non critical status - https://github.com/KalicoCrew/kalico/pull/473
 - GCODE: adds LOG_ROLLOVER gcode command to trigger a log rollover - https://github.com/KalicoCrew/kalico/pull/498
+- Added RESET_VELOCITY_LIMIT command to reset velocity limits - https://github.com/KalicoCrew/kalico/pull/472
