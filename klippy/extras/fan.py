@@ -9,6 +9,7 @@ class Fan:
     def __init__(self, config, default_shutdown_speed=0.):
         self.printer = config.get_printer()
         self.last_fan_value = self.last_req_value = 0.
+        self.last_pwm_value = 0.0
         # Read config
         self.min_power = config.getfloat("min_power", default=None, minval=0., maxval=1.)
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
@@ -97,6 +98,7 @@ class Fan:
             return "delay", self.kick_start_time
         self.last_fan_value = self.last_req_value = value
         self.mcu_fan.set_pwm(print_time, pwm_value)
+        self.last_pwm_value = pwm_value
     def set_speed(self, value, print_time=None):
         self.gcrq.send_async_request(value, print_time)
     def set_speed_from_command(self, value):
@@ -110,7 +112,9 @@ class Fan:
     def get_status(self, eventtime):
         tachometer_status = self.tachometer.get_status(eventtime)
         return {
-            'speed': self.last_req_value,
+            'power': self.last_pwm_value,
+            'value': self.last_fan_value,
+            'speed': self.last_fan_value * self.max_power,
             'rpm': tachometer_status['rpm'],
         }
 
