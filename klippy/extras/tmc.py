@@ -882,10 +882,10 @@ class BaseTMCCurrentHelper:
         self._configure_pwm(new_current)
         self._configure_spreadcycle()
         self._configure_hysteresis(new_current)
-        self._configure_stallguard()
+        self._configure_stallguard(new_current)
         self._configure_coolstep()
         self._configure_overvoltage()
-        self._configure_highspeed()
+        self._configure_highspeed(new_current)
 
     # Retrieves the clock frequency of the TMC driver.
     # Falls back to a default value (12.5 MHz) if retrieval fails.
@@ -993,9 +993,9 @@ class BaseTMCCurrentHelper:
         self.fields.set_field('hend', hend)
 
     # Configures StallGuard parameters for detecting and responding to motor stalls.
-    def _configure_stallguard(self):
+    def _configure_stallguard(self,new_current):
         pwmthrs = 0
-        vmaxpwm = self._calculate_vmaxpwm_parameters()
+        vmaxpwm = self._calculate_vmaxpwm_parameters(new_current)
         coolthrs = 0.75 * self.stepper.get_rotation_distance()[0]
         logging.info(f"tmc {self.name} ::: coolthrs: {coolthrs}")
 
@@ -1037,8 +1037,8 @@ class BaseTMCCurrentHelper:
             self.fields.set_field('overvoltage_vth', vth)
 
     # Adjusts parameters for high-speed motor operation to maintain stability.
-    def _configure_highspeed(self):
-        vmaxpwm = 1.2 * self._calculate_vmaxpwm_parameters()
+    def _configure_highspeed(self,new_current):
+        vmaxpwm = 1.2 * self._calculate_vmaxpwm_parameters(new_current)
         logging.info(f"tmc {self.name} ::: vmaxpwm: {vmaxpwm}")
         self.set_driver_velocity_field('thigh', vmaxpwm)
         self.fields.set_field('vhighfs', False)
@@ -1046,9 +1046,9 @@ class BaseTMCCurrentHelper:
         self.fields.set_field('multistep_filt', True)
 
     # Helper Method: Calculates the maximum PWM value based on motor speed and rotation distance.
-    def _calculate_vmaxpwm_parameters(self):
+    def _calculate_vmaxpwm_parameters(self,new_current):
         motor_object = self.printer.lookup_object(self.motor_name)
-        maxpwmrps = motor_object.maxpwmrps(volts=self.voltage, current=self.new_current)
+        maxpwmrps = motor_object.maxpwmrps(volts=self.voltage, current=new_current)
         rdist, _ = self.stepper.get_rotation_distance()
         return maxpwmrps * rdist
 
