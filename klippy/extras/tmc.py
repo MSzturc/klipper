@@ -683,7 +683,6 @@ class BaseTMCCurrentHelper:
         self.driver_name = config.get_name() #Name of the section eg.: tmc5160 stepper_y
         self.driver_type = self.driver_name.split()[0] #Type of the stepper driver eg.: tmc5160
         self.name = self.driver_name.split()[-1] # Name of the stepper eg.: stepper_y
-        
         self.motor = config.get('motor', None)
         if self.motor is not None:
             self.motor_name = "motor_constants " + self.motor
@@ -752,7 +751,7 @@ class BaseTMCCurrentHelper:
         self.toff = config.getint('driver_TOFF', default=None, minval=1, maxval=15)
         self.tpfd = config.getint('driver_TPFD', default=None, minval=0, maxval=15)
 
-        self.cs = config.getint('current_scale', default=0, minval=0, maxval=31)
+        self.cs = config.getint('driver_CS', default=0, minval=0, maxval=31)
 
 
         self.sg4_thrs = config.getint('driver_SGTHRS', default=None, minval=0, maxval=255)
@@ -878,6 +877,9 @@ class BaseTMCCurrentHelper:
     def tune_driver(self, new_current, print_time=None):
         logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
 
+        force_move = self.printer.lookup_object("force_move")
+        self.stepper = force_move.lookup_stepper(self.name)
+
         self._get_tmc_clock_frequency()
         self._configure_pwm(new_current)
         self._configure_spreadcycle()
@@ -940,18 +942,18 @@ class BaseTMCCurrentHelper:
         sdcycles = ncycles / 4
 
         # Adjust timing for slow decay cycles to optimize performance.
-        toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
-        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {toff}")
+        self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
+        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {self.toff}")
 
         if self.tbl is None:
             self.tbl = 0
 
-        if toff == 1 and self.tbl == 0:
+        if self.toff == 1 and self.tbl == 0:
             # Ensure valid blanking time for low toff values.
             self.tbl = 1
 
         tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
-        tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
+        tsd = (12.0 + 32.0 * self.toff) / self.driver_clock_frequency
 
         # ncycles = steps needed for a whole cycle
         # - 2x slow decay phase
@@ -964,7 +966,7 @@ class BaseTMCCurrentHelper:
 
         self.fields.set_field('tpfd', tpfd)
         self.fields.set_field('tbl', self.tbl)
-        self.fields.set_field('toff', toff)
+        self.fields.set_field('toff', self.toff)
 
         chop_freq=(2*tsd+tblank)/1000/self.driver_clock_frequency
         logging.info(f"tmc {self.name} ::: chop_freq: {chop_freq}")
@@ -1049,7 +1051,7 @@ class BaseTMCCurrentHelper:
     def _calculate_vmaxpwm_parameters(self,new_current):
         motor_object = self.printer.lookup_object(self.motor_name)
         maxpwmrps = motor_object.maxpwmrps(volts=self.voltage, current=new_current)
-        rdist, _ = self.stepper.get_rotation_distance()
+        rdist= self.stepper.get_rotation_distance()[0]
         return maxpwmrps * rdist
 
 
