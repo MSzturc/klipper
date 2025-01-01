@@ -742,7 +742,7 @@ class BaseTMCCurrentHelper:
                                                default=PWM_FREQ_TARGETS[self.driver_type],
                                                minval=10e3, maxval=100e3)
         
-        self.chooper_freq_target = config.getfloat('chooper_freq_target',
+        self.chopper_freq_target = config.getfloat('chopper_freq_target',
                                                default=None,
                                                minval=10e3, maxval=100e3)
 
@@ -951,7 +951,7 @@ class BaseTMCCurrentHelper:
             duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
             chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
 
-            target = self.chooper_freq_target or 20e3
+            target = self.chopper_freq_target or 20e3
             while chop_freq_lowest > target:
                 toff += 1
                 tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
