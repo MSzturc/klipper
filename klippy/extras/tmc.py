@@ -756,6 +756,9 @@ class BaseTMCCurrentHelper:
         self.tpfd = config.getint('driver_TPFD', default=None, minval=0, maxval=15)
         self.cs = config.getint('driver_CS', default=0, minval=0, maxval=31)
 
+        self.hstrt = config.getint('driver_HSTRT', default=None, minval=0, maxval=7)
+        self.hend = config.getint('driver_HEND', default=None, minval=0, maxval=15)
+
         self.sg4_thrs = config.getint('driver_SGTHRS', default=None, minval=0, maxval=255)
         self.sgt = config.getint('driver_SGT', default=None, minval=-64, maxval=63)
 
@@ -883,8 +886,8 @@ class BaseTMCCurrentHelper:
 
         self._get_tmc_clock_frequency()
         self._configure_pwm(new_current)
-        self._configure_spreadcycle(new_current)
-        self._configure_hysteresis(new_current)
+        new_tbl, new_toff = self._configure_spreadcycle(new_current)
+        self._configure_hysteresis(new_current, new_tbl,new_toff)
         self._configure_stallguard(new_current)
         self._configure_coolstep()
         self._configure_overvoltage()
@@ -937,10 +940,9 @@ class BaseTMCCurrentHelper:
         # => 1/2 (50%) * 1/2 (2 slow dacay cycles) = 1/4
         sdcycles = ncycles / 4
 
-        if self.tbl is None:
-            self.tbl = 0
+        tbl = self.tbl or 0
 
-        tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
+        tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
 
         # Adjust timing for slow decay cycles to optimize performance.
         if self.toff is None:
@@ -949,11 +951,7 @@ class BaseTMCCurrentHelper:
             duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
             chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
 
-            if self.chooper_freq_target:
-                target = self.chooper_freq_target
-            else:
-                target = 20e3
-
+            target = self.chooper_freq_target or 20e3
             while chop_freq_lowest > target:
                 toff += 1
                 tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
@@ -965,18 +963,19 @@ class BaseTMCCurrentHelper:
             duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
             chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
             logging.info(f"tmc {self.name} ::: toff: {toff}, target chopper freq: {chop_freq_lowest}")
-            self.toff = toff
+        else:
+            toff = self.toff
                     
 
         logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}")
 
-        if self.toff == 1 and self.tbl == 0:
+        if toff == 1 and tbl == 0:
             # Ensure valid blanking time for low toff values.
-            self.tbl = 1
-            tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
+            tbl = 1
+            tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
 
-        tsd = (12.0 + 32.0 * self.toff) / self.driver_clock_frequency
-        tsd_duty = (24.0 + 32.0 * self.toff) / self.driver_clock_frequency
+        tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
+        tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
 
         chop_freq_limit=1/(2*tsd+2* tblank)
         duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
@@ -993,27 +992,32 @@ class BaseTMCCurrentHelper:
         pfdcycles = ncycles - (tsd_duty * 2 - tblank) * self.driver_clock_frequency
         tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128)))) if self.tpfd is None else self.tpfd
 
-        logging.info(f"tmc {self.name} ::: tbl: {self.tbl}, pfdcycles: {pfdcycles}, tpfd: {tpfd}")
+        logging.info(f"tmc {self.name} ::: tbl: {tbl}, pfdcycles: {pfdcycles}, tpfd: {tpfd}")
 
         self.fields.set_field('tpfd', tpfd)
-        self.fields.set_field('tbl', self.tbl)
-        self.fields.set_field('toff', self.toff)
+        self.fields.set_field('tbl', tbl)
+        self.fields.set_field('toff', toff)
+
+        return tbl, toff
 
     # Configures hysteresis parameters to fine-tune motor torque control.
-    def _configure_hysteresis(self, new_current):
-        motor_object = self.printer.lookup_object(self.motor_name)
+    def _configure_hysteresis(self, new_current,new_tbl,new_toff):
 
-        hstrt, hend = motor_object.hysteresis(
-            name=self.name,
-            volts=self.voltage,
-            current=new_current,
-            tbl=self.tbl,
-            toff=self.toff,
-            fclk=self.driver_clock_frequency,
-            extra=self.extra_hysteresis,
-            rsense=self.sense_resistor,
-            scale=self.cs
-        )
+        if self.hstrt and self.hend:
+            hstrt, hend = self.hstrt, self.hend
+        else:
+            motor_object = self.printer.lookup_object(self.motor_name)
+            hstrt, hend = motor_object.hysteresis(
+                name=self.name,
+                volts=self.voltage,
+                current=new_current,
+                tbl=new_tbl,
+                toff=new_toff,
+                fclk=self.driver_clock_frequency,
+                extra=self.extra_hysteresis,
+                rsense=self.sense_resistor,
+                scale=self.cs
+            )
 
         # Logging hysteresis values for debugging
         logging.info(f"tmc {self.name} ::: hstrt: {hstrt}, hend: {hend}, extra: {self.extra_hysteresis}")
