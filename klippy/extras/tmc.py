@@ -945,7 +945,7 @@ class BaseTMCCurrentHelper:
         # Adjust timing for slow decay cycles to optimize performance.
         if self.toff is None:
             toff = 0
-            tsd_duty = (24.0 + 32.0 * self.toff) / self.driver_clock_frequency
+            tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
             duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
             chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
 
@@ -956,7 +956,7 @@ class BaseTMCCurrentHelper:
 
             while chop_freq_lowest > target:
                 toff += 1
-                tsd_duty = (24.0 + 32.0 * self.toff) / self.driver_clock_frequency
+                tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
                 duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
                 chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
 
