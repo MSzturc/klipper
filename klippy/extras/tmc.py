@@ -925,7 +925,7 @@ class BaseTMCCurrentHelper:
     # Configures SpreadCycle parameters to optimize motor noise, efficiency, and stability.
     def _configure_spreadcycle(self,new_current):
         motor_object = self.printer.lookup_object(self.motor_name)
-        pwm_freq, calculated_freq = motor_object.pwmfreq(fclk=self.driver_clock_frequency,target=self.pwm_freq_target)
+        _, calculated_freq = motor_object.pwmfreq(fclk=self.driver_clock_frequency,target=self.pwm_freq_target)
         
         ncycles = int(math.ceil(self.driver_clock_frequency / calculated_freq))
 
@@ -961,7 +961,7 @@ class BaseTMCCurrentHelper:
         # - 2x slow decay phase
         # - Blank time
         # = Cycles left for pfd
-        pfdcycles = ncycles - tsd * 2 - tblank
+        pfdcycles = ncycles - (tsd_duty * 2 - tblank) * self.driver_clock_frequency
         tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128)))) if self.tpfd is None else self.tpfd
 
         logging.info(f"tmc {self.name} ::: tbl: {self.tbl}, pfdcycles: {pfdcycles}, tpfd: {tpfd}")
