@@ -900,11 +900,12 @@ class BaseTMCCurrentHelper:
 
     # Configures PWM parameters for optimal motor control and efficiency.
     def _configure_pwm(self, new_current):
-        pwm_freq, calculated_freq = self._calculate_pwm_frequency()
+        motor_object = self.printer.lookup_object(self.motor_name)
+
+        pwm_freq, calculated_freq = motor_object.pwmfreq(fclk=self.driver_clock_frequency,target=self.pwm_freq_target)
         logging.info(f"tmc {self.name} ::: Calculated Frequency: {calculated_freq / 1000} kHz")
         logging.info(f"tmc {self.name} ::: pwm_freq: {pwm_freq}")
 
-        motor_object = self.printer.lookup_object(self.motor_name)
         pwmgrad = motor_object.pwmgrad(volts=self.voltage, fclk=self.driver_clock_frequency)
         pwmofs = motor_object.pwmofs(volts=self.voltage, current=new_current)
 
@@ -921,18 +922,11 @@ class BaseTMCCurrentHelper:
         self.fields.set_field("pwm_reg", 15)
         self.fields.set_field("pwm_lim", 4)
         self.fields.set_field("tpwmthrs", 0xfffff)
-
-    # Calculates the PWM frequency based on clock frequency and target.
-    # Source: TMC5160A Page 60: Choices of PWM frequency for Stealthchop
-    def _calculate_pwm_frequency(self):
-        for prescaler, factor in [(3, 2./410), (2, 2./512), (1, 2./683), (0, 2./1024), (0, 0.)]:
-            calculated_freq = self.driver_clock_frequency * factor 
-            if calculated_freq < self.pwm_freq_target:
-                return prescaler, round(calculated_freq, 1)
-
     # Configures SpreadCycle parameters to optimize motor noise, efficiency, and stability.
     def _configure_spreadcycle(self,new_current):
-        pwm_freq, calculated_freq = self._calculate_pwm_frequency()
+        motor_object = self.printer.lookup_object(self.motor_name)
+        pwm_freq, calculated_freq = motor_object.pwmfreq(fclk=self.driver_clock_frequency,target=self.pwm_freq_target)
+        
         ncycles = int(math.ceil(self.driver_clock_frequency / calculated_freq))
 
         # Two slow decay cycles make up for 50% of overall chopper cycle time
