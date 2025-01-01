@@ -964,7 +964,7 @@ class BaseTMCCurrentHelper:
             tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
             duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
             chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
-            logging.info(f"tmc {self.name} ::: toff: {self.toff}, target chopper freq: {chop_freq_lowest}")
+            logging.info(f"tmc {self.name} ::: toff: {toff}, target chopper freq: {chop_freq_lowest}")
             self.toff = toff
                     
 
