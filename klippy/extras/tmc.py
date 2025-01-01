@@ -944,24 +944,27 @@ class BaseTMCCurrentHelper:
 
         # Adjust timing for slow decay cycles to optimize performance.
         if self.toff is None:
+            toff = 0
+            tsd_duty = (24.0 + 32.0 * self.toff) / self.driver_clock_frequency
+            duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
+            chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
+
             if self.chooper_freq_target:
-                toff = 0
-                tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
-                chop_freq_limit = 1 / (2 * tsd + 2 * tblank)
-
-                while chop_freq_limit > self.chooper_freq_target:
-                    logging.info(f"tmc {self.name} ::: calculating toff: {toff}, chop_freq_limit: {chop_freq_limit}")
-                    
-                    toff += 1
-                    tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
-                    chop_freq_limit = 1 / (2 * tsd + 2 * tblank)
-
-                self.toff = toff
+                target = self.chooper_freq_target
             else:
-                # Fallback calculate toff based on pwm freq
-                self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
+                target = 20e3
 
-        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {self.toff}")
+            while chop_freq_lowest > target:
+                toff += 1
+                tsd_duty = (24.0 + 32.0 * self.toff) / self.driver_clock_frequency
+                duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
+                chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
+
+            self.toff = toff
+            logging.info(f"tmc {self.name} ::: toff: {self.toff}, target chopper freq: {chop_freq_lowest}")
+                    
+
+        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}")
 
         if self.toff == 1 and self.tbl == 0:
             # Ensure valid blanking time for low toff values.
