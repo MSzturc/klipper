@@ -750,9 +750,7 @@ class BaseTMCCurrentHelper:
         self.tbl = config.getint('driver_TBL', default=None, minval=0, maxval=3)
         self.toff = config.getint('driver_TOFF', default=None, minval=1, maxval=15)
         self.tpfd = config.getint('driver_TPFD', default=None, minval=0, maxval=15)
-
         self.cs = config.getint('driver_CS', default=0, minval=0, maxval=31)
-
 
         self.sg4_thrs = config.getint('driver_SGTHRS', default=None, minval=0, maxval=255)
         self.sgt = config.getint('driver_SGT', default=None, minval=-64, maxval=63)
@@ -876,13 +874,12 @@ class BaseTMCCurrentHelper:
     # Adjusts the driver settings to operate at a new current level.
     def tune_driver(self, new_current, print_time=None):
         logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
-
         force_move = self.printer.lookup_object("force_move")
         self.stepper = force_move.lookup_stepper(self.name)
 
         self._get_tmc_clock_frequency()
         self._configure_pwm(new_current)
-        self._configure_spreadcycle()
+        self._configure_spreadcycle(new_current)
         self._configure_hysteresis(new_current)
         self._configure_stallguard(new_current)
         self._configure_coolstep()
@@ -904,7 +901,7 @@ class BaseTMCCurrentHelper:
     # Configures PWM parameters for optimal motor control and efficiency.
     def _configure_pwm(self, new_current):
         pwm_freq, calculated_freq = self._calculate_pwm_frequency()
-        logging.info(f"tmc {self.name} ::: Calculated Frequency: {calculated_freq} kHz")
+        logging.info(f"tmc {self.name} ::: Calculated Frequency: {calculated_freq / 1000} kHz")
         logging.info(f"tmc {self.name} ::: pwm_freq: {pwm_freq}")
 
         motor_object = self.printer.lookup_object(self.motor_name)
@@ -934,15 +931,17 @@ class BaseTMCCurrentHelper:
                 return prescaler, round(calculated_freq, 1)
 
     # Configures SpreadCycle parameters to optimize motor noise, efficiency, and stability.
-    def _configure_spreadcycle(self):
-        ncycles = int(math.ceil(self.driver_clock_frequency / self.pwm_freq_target))
+    def _configure_spreadcycle(self,new_current):
+        pwm_freq, calculated_freq = self._calculate_pwm_frequency()
+        ncycles = int(math.ceil(self.driver_clock_frequency / calculated_freq))
 
         # Two slow decay cycles make up for 50% of overall chopper cycle time
         # => 1/2 (50%) * 1/2 (2 slow dacay cycles) = 1/4
         sdcycles = ncycles / 4
 
         # Adjust timing for slow decay cycles to optimize performance.
-        self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
+        if self.toff is None:
+            self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
         logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {self.toff}")
 
         if self.tbl is None:
@@ -954,6 +953,15 @@ class BaseTMCCurrentHelper:
 
         tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
         tsd = (12.0 + 32.0 * self.toff) / self.driver_clock_frequency
+        tsd_duty = (24.0 + 32.0 * self.toff) / self.driver_clock_frequency
+
+        chop_freq_limit=1/(2*tsd+2* tblank)
+        duty_cycle_highside = new_current * 0.7 / self.voltage + (tblank/(tblank+tsd_duty))
+        chop_freq_lowest=1/((2+4*duty_cycle_highside)*tsd_duty)
+
+        logging.info(f"tmc {self.name} ::: duty_cycle_highside: {duty_cycle_highside}")
+        logging.info(f"tmc {self.name} ::: chop_freq_limit: {chop_freq_limit / 1000}")
+        logging.info(f"tmc {self.name} ::: chop_freq_lowest: {chop_freq_lowest / 1000}")
 
         # ncycles = steps needed for a whole cycle
         # - 2x slow decay phase
@@ -967,9 +975,6 @@ class BaseTMCCurrentHelper:
         self.fields.set_field('tpfd', tpfd)
         self.fields.set_field('tbl', self.tbl)
         self.fields.set_field('toff', self.toff)
-
-        chop_freq=(2*tsd+tblank)/1000/self.driver_clock_frequency
-        logging.info(f"tmc {self.name} ::: chop_freq: {chop_freq}")
 
     # Configures hysteresis parameters to fine-tune motor torque control.
     def _configure_hysteresis(self, new_current):
