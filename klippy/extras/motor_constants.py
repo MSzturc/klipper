@@ -39,6 +39,14 @@ class MotorConstants:
         if steps==0:
             steps=self.S
         return (255 - self.pwmofs(volts, current)) / ( math.pi * self.pwmgrad(fclk, steps))
+
+    # Calculates the PWM frequency based on clock frequency and target.
+    # Source: TMC5160A Page 60: Choices of PWM frequency for Stealthchop
+    def pwmfreq(self, fclk=12.5e6, target=55e3):
+        for prescaler, factor in [(3, 2./410), (2, 2./512), (1, 2./683), (0, 2./1024), (0, 0.)]:
+            calculated_freq = fclk * factor 
+            if calculated_freq < target:
+                return prescaler, round(calculated_freq, 1)
     def hysteresis(self,name, extra, fclk, volts, current, tbl, toff, rsense,scale):
         I = (current if current > 0.0 else self.I) * math.sqrt(2)
         
