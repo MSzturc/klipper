@@ -741,6 +741,10 @@ class BaseTMCCurrentHelper:
         self.pwm_freq_target = config.getfloat('pwm_freq_target',
                                                default=PWM_FREQ_TARGETS[self.driver_type],
                                                minval=10e3, maxval=100e3)
+        
+        self.chooper_freq_target = config.getfloat('chooper_freq_target',
+                                               default=None,
+                                               minval=10e3, maxval=100e3)
 
         self.voltage = config.getfloat('voltage', default=None, minval=0.0, maxval=60.0)
 
@@ -933,19 +937,37 @@ class BaseTMCCurrentHelper:
         # => 1/2 (50%) * 1/2 (2 slow dacay cycles) = 1/4
         sdcycles = ncycles / 4
 
-        # Adjust timing for slow decay cycles to optimize performance.
-        if self.toff is None:
-            self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
-        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {self.toff}")
-
         if self.tbl is None:
             self.tbl = 0
+
+        tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
+
+        # Adjust timing for slow decay cycles to optimize performance.
+        if self.toff is None:
+            if self.chooper_freq_target:
+                toff = 0
+                tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
+                chop_freq_limit = 1 / (2 * tsd + 2 * tblank)
+
+                while chop_freq_limit > self.chooper_freq_target:
+                    logging.info(f"tmc {self.name} ::: calculating toff: {toff}, chop_freq_limit: {chop_freq_limit}")
+                    
+                    toff += 1
+                    tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
+                    chop_freq_limit = 1 / (2 * tsd + 2 * tblank)
+
+                self.toff = toff
+            else:
+                # Fallback calculate toff based on pwm freq
+                self.toff = max(min(int(math.ceil(max(sdcycles - 24, 0) / 32)), 15), 1)
+
+        logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}, toff: {self.toff}")
 
         if self.toff == 1 and self.tbl == 0:
             # Ensure valid blanking time for low toff values.
             self.tbl = 1
+            tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
 
-        tblank = 16.0 * (1.5 ** self.tbl) / self.driver_clock_frequency
         tsd = (12.0 + 32.0 * self.toff) / self.driver_clock_frequency
         tsd_duty = (24.0 + 32.0 * self.toff) / self.driver_clock_frequency
 
