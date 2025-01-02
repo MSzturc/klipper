@@ -4,19 +4,38 @@
 //
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
+#include <math.h> // tanh
 #include <stddef.h> // offsetof
 #include <stdlib.h> // malloc
 #include <string.h> // memset
 #include "compiler.h" // __visible
 #include "itersolve.h" // struct stepper_kinematics
+#include "integrate.h" // struct smoother
 #include "list.h" // list_node
+#include "kin_shaper.h" // struct shaper_pulses
 #include "pyhelper.h" // errorf
 #include "trapq.h" // move_get_distance
 
-struct pa_params {
-    double pressure_advance, active_print_time;
+struct pressure_advance_params;
+typedef double (*pressure_advance_func)(
+        double, double, struct pressure_advance_params *pa_params);
+
+struct pressure_advance_params {
+    union {
+        struct {
+            double pressure_advance;
+        };
+        struct {
+            double linear_advance, nonlinear_offset, linearization_velocity;
+        };
+        double params[3];
+    };
+    double active_print_time;
+    pressure_advance_func pa_func;
     struct list_node node;
 };
+
+static const double pa_smoother_coeffs[] = {15./8., 0., -15., 0., 30.};
 
 // Without pressure advance, the extruder stepper position is:
 //     extruder_position(t) = nominal_position(t)
@@ -25,151 +44,383 @@ struct pa_params {
 // deceleration). The formula is:
 //     pa_position(t) = (nominal_position(t)
 //                       + pressure_advance * nominal_velocity(t))
-// Which is then "smoothed" using a weighted average:
+// The nominal position and velocity are then smoothed using a weighted average:
 //     smooth_position(t) = (
-//         definitive_integral(pa_position(x) * (smooth_time/2 - abs(t-x)) * dx,
+//         definitive_integral(nominal_position(x+t_offs) * smoother(t-x) * dx,
 //                             from=t-smooth_time/2, to=t+smooth_time/2)
-//         / ((smooth_time/2)**2))
-
-// Calculate the definitive integral of the motion formula:
-//   position(t) = base + t * (start_v + t * half_accel)
-static double
-extruder_integrate(double base, double start_v, double half_accel
-                   , double start, double end)
-{
-    double half_v = .5 * start_v, sixth_a = (1. / 3.) * half_accel;
-    double si = start * (base + start * (half_v + start * sixth_a));
-    double ei = end * (base + end * (half_v + end * sixth_a));
-    return ei - si;
-}
-
-// Calculate the definitive integral of time weighted position:
-//   weighted_position(t) = t * (base + t * (start_v + t * half_accel))
-static double
-extruder_integrate_time(double base, double start_v, double half_accel
-                        , double start, double end)
-{
-    double half_b = .5 * base, third_v = (1. / 3.) * start_v;
-    double eighth_a = .25 * half_accel;
-    double si = start * start * (half_b + start * (third_v + start * eighth_a));
-    double ei = end * end * (half_b + end * (third_v + end * eighth_a));
-    return ei - si;
-}
+//     smooth_velocity(t) = (
+//         definitive_integral(nominal_velocity(x+t_offs) * smoother(t-x) * dx,
+//                             from=t-smooth_time/2, to=t+smooth_time/2)
+// and the final pressure advance value calculated as
+//     smooth_pa_position(t) = smooth_position(t) + pa_func(smooth_velocity(t))
+// where pa_func(v) = pressure_advance * v for linear velocity model or a more
+// complicated function for non-linear pressure advance models.
 
 // Calculate the definitive integral of extruder for a given move
-static double
-pa_move_integrate(struct move *m, struct list_head *pa_list
-                  , double base, double start, double end, double time_offset)
+static inline void
+pa_move_integrate(const struct move *m, int axis, double base
+                  , double t0, const smoother_antiderivatives *ad
+                  , double *pos_integral, double *pa_velocity_integral)
 {
-    if (start < 0.)
-        start = 0.;
-    if (end > m->move_t)
-        end = m->move_t;
-    // Determine pressure_advance value
-    int can_pressure_advance = m->axes_r.y != 0.;
-    double pressure_advance = 0.;
-    if (can_pressure_advance) {
-        struct pa_params *pa = list_last_entry(pa_list, struct pa_params, node);
-        while (unlikely(pa->active_print_time > m->print_time) &&
-                !list_is_first(&pa->node, pa_list)) {
-            pa = list_prev_entry(pa, node);
-        }
-        pressure_advance = pa->pressure_advance;
-    }
     // Calculate base position and velocity with pressure advance
-    base += pressure_advance * m->start_v;
-    double start_v = m->start_v + pressure_advance * 2. * m->half_accel;
+    int can_pressure_advance = m->axes_r.x > 0. || m->axes_r.y > 0.;
+    double smooth_velocity;
     // Calculate definitive integral
-    double ha = m->half_accel;
-    double iext = extruder_integrate(base, start_v, ha, start, end);
-    double wgt_ext = extruder_integrate_time(base, start_v, ha, start, end);
-    return wgt_ext - time_offset * iext;
+    *pos_integral += integrate_move(m, axis, base, t0, ad,
+                                    can_pressure_advance ? &smooth_velocity
+                                                         : NULL);
+    if (can_pressure_advance) {
+        *pa_velocity_integral += smooth_velocity;
+    }
 }
 
 // Calculate the definitive integral of the extruder over a range of moves
-static double
-pa_range_integrate(struct move *m, double move_time
-                   , struct list_head *pa_list, double hst)
+static void
+pa_range_integrate(const struct move *m, int axis, double move_time
+                   , const struct smoother *sm
+                   , double *pos_integral, double *pa_velocity_integral)
 {
+    move_time += sm->t_offs;
+    while (unlikely(move_time < 0.)) {
+        m = list_prev_entry(m, node);
+        move_time += m->move_t;
+    }
+    while (unlikely(move_time > m->move_t)) {
+        move_time -= m->move_t;
+        m = list_next_entry(m, node);
+    }
     // Calculate integral for the current move
-    double res = 0., start = move_time - hst, end = move_time + hst;
-    double start_base = m->start_pos.x;
-    res += pa_move_integrate(m, pa_list, 0., start, move_time, start);
-    res -= pa_move_integrate(m, pa_list, 0., move_time, end, end);
+    double start = move_time - sm->hst, end = move_time + sm->hst;
+    double t0 = move_time;
+    double start_base = m->start_pos.axis[axis - 'x'];
+    *pos_integral = *pa_velocity_integral = 0.;
+    if (unlikely(start >= 0. && end <= m->move_t)) {
+        pa_move_integrate(m, axis, 0., t0, &sm->pm_diff,
+                          pos_integral, pa_velocity_integral);
+        *pos_integral += start_base;
+        return;
+    }
+    smoother_antiderivatives left =
+        likely(start < 0.) ? calc_antiderivatives(sm, t0) : sm->p_hst;
+    smoother_antiderivatives right =
+        likely(end > m->move_t) ? calc_antiderivatives(sm, t0 - m->move_t)
+                                : sm->m_hst;
+    smoother_antiderivatives diff = diff_antiderivatives(&right, &left);
+    pa_move_integrate(m, axis, 0., t0, &diff,
+                      pos_integral, pa_velocity_integral);
     // Integrate over previous moves
-    struct move *prev = m;
-    while (unlikely(start < 0.)) {
+    const struct move *prev = m;
+    while (likely(start < 0.)) {
         prev = list_prev_entry(prev, node);
         start += prev->move_t;
-        double base = prev->start_pos.x - start_base;
-        res += pa_move_integrate(prev, pa_list, base, start
-                                 , prev->move_t, start);
+        t0 += prev->move_t;
+        smoother_antiderivatives r = left;
+        left = likely(start < 0.) ? calc_antiderivatives(sm, t0)
+                                  : sm->p_hst;
+        diff = diff_antiderivatives(&r, &left);
+        double base = prev->start_pos.axis[axis - 'x'] - start_base;
+        pa_move_integrate(prev, axis, base, t0, &diff,
+                          pos_integral, pa_velocity_integral);
     }
     // Integrate over future moves
-    while (unlikely(end > m->move_t)) {
+    t0 = move_time;
+    while (likely(end > m->move_t)) {
         end -= m->move_t;
+        t0 -= m->move_t;
         m = list_next_entry(m, node);
-        double base = m->start_pos.x - start_base;
-        res -= pa_move_integrate(m, pa_list, base, 0., end, end);
+        smoother_antiderivatives l = right;
+        right = likely(end > m->move_t) ? calc_antiderivatives(sm,
+                                                               t0 - m->move_t)
+                                        : sm->m_hst;
+        diff = diff_antiderivatives(&right, &l);
+        double base = m->start_pos.axis[axis - 'x'] - start_base;
+        pa_move_integrate(m, axis, base, t0, &diff,
+                          pos_integral, pa_velocity_integral);
     }
-    return res;
+    *pos_integral += start_base;
+}
+
+static void
+shaper_pa_range_integrate(const struct move *m, int axis, double move_time
+                          , const struct shaper_pulses *sp
+                          , const struct smoother *sm
+                          , double *pos_integral, double *pa_velocity_integral)
+{
+    *pos_integral = *pa_velocity_integral = 0.;
+    int num_pulses = sp->num_pulses, i;
+    for (i = 0; i < num_pulses; ++i) {
+        double t = sp->pulses[i].t, a = sp->pulses[i].a;
+        double p_pos_int, p_pa_vel_int;
+        pa_range_integrate(m, axis, move_time + t, sm,
+                           &p_pos_int, &p_pa_vel_int);
+        *pos_integral += a * p_pos_int;
+        *pa_velocity_integral += a * p_pa_vel_int;
+    }
 }
 
 struct extruder_stepper {
     struct stepper_kinematics sk;
+    struct shaper_pulses sp[3];
+    struct smoother sm[3], pa_model_smoother;
+    int smooth_extruding_moves, smooth_extrude_only_moves;
     struct list_head pa_list;
-    double half_smooth_time, inv_half_smooth_time2;
+    double time_offset;
 };
+
+double __visible
+pressure_advance_linear_model_func(double position, double pa_velocity
+                                   , struct pressure_advance_params *pa_params)
+{
+    return position + pa_velocity * pa_params->pressure_advance;
+}
+
+double __visible
+pressure_advance_tanh_model_func(double position, double pa_velocity
+                                 , struct pressure_advance_params *pa_params)
+{
+    position += pa_params->linear_advance * pa_velocity;
+    if (pa_params->nonlinear_offset) {
+        double rel_velocity = pa_velocity / pa_params->linearization_velocity;
+        position += pa_params->nonlinear_offset * tanh(rel_velocity);
+    }
+    return position;
+}
+
+double __visible
+pressure_advance_recipr_model_func(double position, double pa_velocity
+                                   , struct pressure_advance_params *pa_params)
+{
+    position += pa_params->linear_advance * pa_velocity;
+    if (pa_params->nonlinear_offset) {
+        double rel_velocity = pa_velocity / pa_params->linearization_velocity;
+        position +=
+            pa_params->nonlinear_offset * rel_velocity / (1. + rel_velocity);
+    }
+    return position;
+}
+
+double __visible
+pressure_advance_log_model_func(double position, double pa_velocity
+                                , struct pressure_advance_params *pa_params)
+{
+    position += pa_params->linear_advance * pa_velocity;
+    if (pa_params->nonlinear_offset) {
+        double rel_velocity = pa_velocity / pa_params->linearization_velocity;
+        position += pa_params->nonlinear_offset * log(1. + rel_velocity);
+    }
+    return position;
+}
+
+static double
+pa_model_integrate(struct list_head *pa_list, double print_time
+                   , const struct smoother *sm, double e_pos, double pa_vel)
+{
+    print_time += sm->t_offs;
+    double start = print_time - sm->hst, end = print_time + sm->hst;
+    // Calculate integral for the current move
+    struct pressure_advance_params *pa = list_last_entry(
+            pa_list, struct pressure_advance_params, node);
+    struct pressure_advance_params *next_pa = NULL;
+    while (unlikely(pa->active_print_time > print_time &&
+                !list_is_first(&pa->node, pa_list))) {
+        next_pa = pa;
+        pa = list_prev_entry(pa, node);
+    }
+    if (likely(pa->active_print_time <= start &&
+                (next_pa == NULL || end <= next_pa->active_print_time))) {
+        return pa->pa_func(e_pos, pa_vel, pa);
+    }
+    smoother_antiderivatives left = likely(start < pa->active_print_time)
+        ? calc_antiderivatives(sm, print_time - pa->active_print_time)
+        : sm->p_hst;
+    smoother_antiderivatives right = likely(
+            next_pa != NULL && end > next_pa->active_print_time)
+        ? calc_antiderivatives(sm, print_time - next_pa->active_print_time)
+        : sm->m_hst;
+    smoother_antiderivatives diff = diff_antiderivatives(&right, &left);
+    double res = pa->pa_func(e_pos, pa_vel, pa) * diff.it0;
+
+    // Integrate over previous PA configs
+    while (likely(start < pa->active_print_time &&
+                !list_is_first(&pa->node, pa_list))) {
+        pa = list_prev_entry(pa, node);
+        smoother_antiderivatives r = left;
+        left = likely(start < pa->active_print_time)
+            ? calc_antiderivatives(sm, print_time - pa->active_print_time)
+            : sm->p_hst;
+        diff = diff_antiderivatives(&r, &left);
+        res += pa->pa_func(e_pos, pa_vel, pa) * diff.it0;
+    }
+    // Integrate over next PA configs
+    while (likely(next_pa != NULL && end >= next_pa->active_print_time)) {
+        pa = next_pa;
+        next_pa = list_is_last(&next_pa->node, pa_list)
+            ? NULL : list_next_entry(next_pa, node);
+        smoother_antiderivatives l = right;
+        right = likely(next_pa != NULL && end >= next_pa->active_print_time)
+            ? calc_antiderivatives(sm, print_time - next_pa->active_print_time)
+            : sm->m_hst;
+        diff = diff_antiderivatives(&right, &l);
+        res += pa->pa_func(e_pos, pa_vel, pa) * diff.it0;
+    }
+    return res;
+}
 
 static double
 extruder_calc_position(struct stepper_kinematics *sk, struct move *m
                        , double move_time)
 {
     struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
-    double hst = es->half_smooth_time;
-    if (!hst)
-        // Pressure advance not enabled
-        return m->start_pos.x + move_get_distance(m, move_time);
-    // Apply pressure advance and average over smooth_time
-    double area = pa_range_integrate(m, move_time, &es->pa_list, hst);
-    return m->start_pos.x + area * es->inv_half_smooth_time2;
+    move_time += es->time_offset;
+    while (unlikely(move_time < 0.)) {
+        m = list_prev_entry(m, node);
+        move_time += m->move_t;
+    }
+    while (unlikely(move_time >= m->move_t)) {
+        move_time -= m->move_t;
+        m = list_next_entry(m, node);
+    }
+    int i;
+    struct coord e_pos, pa_vel;
+    double move_dist = move_get_distance(m, move_time);
+    for (i = 0; i < 3; ++i) {
+        int axis = 'x' + i;
+        const struct shaper_pulses* sp = &es->sp[i];
+        const struct smoother* sm = &es->sm[i];
+        int num_pulses = sp->num_pulses;
+        if (!sm->hst) {
+            pa_vel.axis[i] = 0.;
+        } else if (num_pulses) {
+            shaper_pa_range_integrate(m, axis, move_time, sp, sm,
+                                      &e_pos.axis[i], &pa_vel.axis[i]);
+        } else {
+            pa_range_integrate(m, axis, move_time, sm,
+                               &e_pos.axis[i], &pa_vel.axis[i]);
+        }
+        if (!sm->hst || !es->smooth_extruding_moves ||
+                (!es->smooth_extrude_only_moves && axis == 'z')) {
+            e_pos.axis[i] = num_pulses
+                ? shaper_calc_position(m, axis, move_time, sp)
+                : m->start_pos.axis[i] + m->axes_r.axis[i] * move_dist;
+        }
+    }
+    double position = e_pos.x + e_pos.y + e_pos.z;
+    double pa_velocity = pa_vel.x + pa_vel.y + pa_vel.z;
+    if (pa_velocity <= 0.)
+        return position;
+    return pa_model_integrate(
+            &es->pa_list, m->print_time + move_time,
+            &es->pa_model_smoother, position, pa_velocity);
+}
+
+static void
+extruder_note_generation_time(struct extruder_stepper *es)
+{
+    double pre_active = 0., post_active = 0.;
+    int i;
+    for (i = 0; i < 3; ++i) {
+        struct shaper_pulses* sp = &es->sp[i];
+        const struct smoother* sm = &es->sm[i];
+        double pre_active_axis = sm->hst + sm->t_offs + es->time_offset +
+            (sp->num_pulses ? sp->pulses[sp->num_pulses-1].t : 0.);
+        double post_active_axis = sm->hst - sm->t_offs - es->time_offset +
+            (sp->num_pulses ? -sp->pulses[0].t : 0.);
+        if (pre_active_axis > pre_active)
+            pre_active = pre_active_axis;
+        if (post_active_axis > post_active)
+            post_active = post_active_axis;
+    }
+    es->sk.gen_steps_pre_active = pre_active;
+    es->sk.gen_steps_post_active = post_active;
+    init_smoother(ARRAY_SIZE(pa_smoother_coeffs), pa_smoother_coeffs,
+                  pre_active + post_active, &es->pa_model_smoother);
+    es->pa_model_smoother.t_offs += 0.5 * (post_active - pre_active);
 }
 
 void __visible
 extruder_set_pressure_advance(struct stepper_kinematics *sk, double print_time
-                              , double pressure_advance, double smooth_time)
+                              , int n_params, double params[]
+                              , pressure_advance_func func, double time_offset)
 {
     struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
-    double hst = smooth_time * .5, old_hst = es->half_smooth_time;
-    es->half_smooth_time = hst;
-    es->sk.gen_steps_pre_active = es->sk.gen_steps_post_active = hst;
 
     // Cleanup old pressure advance parameters
-    double cleanup_time = sk->last_flush_time - (old_hst > hst ? old_hst : hst);
-    struct pa_params *first_pa = list_first_entry(
-            &es->pa_list, struct pa_params, node);
+    double cleanup_time = sk->last_flush_time - es->sk.gen_steps_pre_active;
+    struct pressure_advance_params *first_pa = list_first_entry(
+            &es->pa_list, struct pressure_advance_params, node);
     while (!list_is_last(&first_pa->node, &es->pa_list)) {
-        struct pa_params *next_pa = list_next_entry(first_pa, node);
+        struct pressure_advance_params *next_pa = list_next_entry(
+                first_pa, node);
         if (next_pa->active_print_time >= cleanup_time) break;
         list_del(&first_pa->node);
         first_pa = next_pa;
     }
 
-    if (! hst)
-        return;
-    es->inv_half_smooth_time2 = 1. / (hst * hst);
+    es->time_offset = time_offset;
+    extruder_note_generation_time(es);
 
-    if (list_last_entry(&es->pa_list, struct pa_params, node)->pressure_advance
-            == pressure_advance) {
+    struct pressure_advance_params *last_pa = list_last_entry(
+            &es->pa_list, struct pressure_advance_params, node);
+    if (n_params < 0 || n_params > ARRAY_SIZE(last_pa->params))
+        return;
+    size_t param_size = n_params * sizeof(params[0]);
+    if (last_pa->pa_func == func &&
+            memcmp(&last_pa->params, params, param_size) == 0) {
         // Retain old pa_params
         return;
     }
     // Add new pressure advance parameters
-    struct pa_params *pa = malloc(sizeof(*pa));
-    memset(pa, 0, sizeof(*pa));
-    pa->pressure_advance = pressure_advance;
-    pa->active_print_time = print_time;
-    list_add_tail(&pa->node, &es->pa_list);
+    struct pressure_advance_params *pa_params = malloc(sizeof(*pa_params));
+    memset(pa_params, 0, sizeof(*pa_params));
+    memcpy(&pa_params->params, params, param_size);
+    pa_params->pa_func = func;
+    pa_params->active_print_time = print_time;
+    list_add_tail(&pa_params->node, &es->pa_list);
+}
+
+int __visible
+extruder_set_shaper_params(struct stepper_kinematics *sk, char axis
+                           , int n, double a[], double t[])
+{
+    if (axis != 'x' && axis != 'y')
+        return -1;
+    struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
+    struct shaper_pulses *sp = &es->sp[axis-'x'];
+    int status = init_shaper(n, a, t, sp);
+    extruder_note_generation_time(es);
+    return status;
+}
+
+void __visible
+extruder_set_smooth_moves_params(struct stepper_kinematics *sk
+                                 , int smooth_extruding_moves
+                                 , int smooth_extrude_only_moves)
+{
+    struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
+    es->smooth_extruding_moves = smooth_extruding_moves;
+    es->smooth_extrude_only_moves = smooth_extrude_only_moves;
+}
+
+int __visible
+extruder_set_smoothing_params(struct stepper_kinematics *sk, char axis
+                              , int n, double a[], double t_sm, double t_offs)
+{
+    if (axis != 'x' && axis != 'y' && axis != 'z')
+        return -1;
+    struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
+    struct smoother *sm = &es->sm[axis-'x'];
+    int status = init_smoother(n, a, t_sm, sm);
+    sm->t_offs = t_offs;
+    extruder_note_generation_time(es);
+    return status;
+}
+
+double __visible
+extruder_get_step_gen_window(struct stepper_kinematics *sk)
+{
+    struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
+    return es->sk.gen_steps_pre_active > es->sk.gen_steps_post_active
+         ? es->sk.gen_steps_pre_active : es->sk.gen_steps_post_active;
 }
 
 struct stepper_kinematics * __visible
@@ -178,11 +429,12 @@ extruder_stepper_alloc(void)
     struct extruder_stepper *es = malloc(sizeof(*es));
     memset(es, 0, sizeof(*es));
     es->sk.calc_position_cb = extruder_calc_position;
-    es->sk.active_flags = AF_X;
+    es->sk.active_flags = AF_X | AF_Y | AF_Z;
     list_init(&es->pa_list);
-    struct pa_params *pa = malloc(sizeof(*pa));
-    memset(pa, 0, sizeof(*pa));
-    list_add_tail(&pa->node, &es->pa_list);
+    struct pressure_advance_params *pa_params = malloc(sizeof(*pa_params));
+    memset(pa_params, 0, sizeof(*pa_params));
+    pa_params->pa_func = pressure_advance_linear_model_func;
+    list_add_tail(&pa_params->node, &es->pa_list);
     return &es->sk;
 }
 
@@ -191,8 +443,8 @@ extruder_stepper_free(struct stepper_kinematics *sk)
 {
     struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
     while (!list_empty(&es->pa_list)) {
-        struct pa_params *pa = list_first_entry(
-                &es->pa_list, struct pa_params, node);
+        struct pressure_advance_params *pa = list_first_entry(
+                &es->pa_list, struct pressure_advance_params, node);
         list_del(&pa->node);
         free(pa);
     }
