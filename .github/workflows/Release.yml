@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        description: New version number in X.Y.Z
+        required: true
+
+jobs:
+  update-main-branch:
+    name: Update main branch
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: everlytic/branch-merge@1.1.5
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          source_ref: "develop"
+          target_branch: "main"
+          commit_message_template: "[Automated] Merged {source_ref} into target {target_branch}"
+
+  release:
+    name: Create Release
+    needs: update-main-branch
+    runs-on: ubuntu-22.04
+    outputs:
+      id: ${{ steps.create-release.outputs.id }}
+      date: ${{ steps.base-name.outputs.date }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Get latest tag
+        id: latest_tag
+        shell: bash
+        run: |
+          echo "TAG_NAME=$(git describe --tags $(git rev-list --tags --max-count=1))" >> $GITHUB_OUTPUT
+
+      - name: Generate a changelog
+        uses: orhun/git-cliff-action@v2
+        id: changelog
+        with:
+          config: ./cliff-release.toml
+          args: ${{ steps.latest_tag.outputs.TAG_NAME }}..HEAD
+
+      - name: Create Release
+        id: create-release
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          name: "THEOS klipper ${{ github.event.inputs.version }}"
+          tag_name: ${{ github.event.inputs.version }}
+          body: ${{ steps.changelog.outputs.content }}
+          draft: false
+  
