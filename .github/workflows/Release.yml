@@ -52,8 +52,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          name: "THEOS klipper ${{ github.event.inputs.version }}"
-          tag_name: ${{ github.event.inputs.version }}
+          name: "THEOS klipper v${{ github.event.inputs.version }}"
+          tag_name: "v${{ github.event.inputs.version }}"
           body: ${{ steps.changelog.outputs.content }}
           draft: false
   
