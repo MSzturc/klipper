@@ -9,6 +9,7 @@ class Fan:
     def __init__(self, config, default_shutdown_speed=0.):
         self.printer = config.get_printer()
         self.last_fan_value = self.last_req_value = 0.
+        self.last_pwm_value = 0.0
         # Read config
         self.min_power = config.getfloat("min_power", default=None, minval=0., maxval=1.)
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
@@ -16,6 +17,10 @@ class Fan:
                                                minval=0.)
         self.off_below = config.getfloat('off_below', default=None,
                                          minval=0., maxval=1.)
+        
+        self.initial_speed = config.getfloat(
+            "initial_speed", default=None, minval=0.0, maxval=1.0
+        )
         
         if self.min_power is not None and self.off_below is not None:
             raise config.error(
@@ -63,6 +68,8 @@ class Fan:
         # Register callbacks
         self.printer.register_event_handler("gcode:request_restart",
                                             self._handle_request_restart)
+        
+        self.printer.register_event_handler("klippy:ready", self._handle_ready)
 
     def get_mcu(self):
         return self.mcu_fan.get_mcu()
@@ -71,10 +78,10 @@ class Fan:
             return "discard", 0.
         if value > 0:
             # Scale value between min_power and max_power
+            value = min(value, 1.0)
             pwm_value = (
                 value * (self.max_power - self.min_power) + self.min_power
             )
-            pwm_value = max(self.min_power, min(self.max_power, pwm_value))
         else:
             pwm_value = 0
         if self.enable_pin:
@@ -91,17 +98,23 @@ class Fan:
             return "delay", self.kick_start_time
         self.last_fan_value = self.last_req_value = value
         self.mcu_fan.set_pwm(print_time, pwm_value)
+        self.last_pwm_value = pwm_value
     def set_speed(self, value, print_time=None):
         self.gcrq.send_async_request(value, print_time)
     def set_speed_from_command(self, value):
         self.gcrq.queue_gcode_request(value)
     def _handle_request_restart(self, print_time):
         self.set_speed(0., print_time)
+    def _handle_ready(self):
+        if self.initial_speed:
+            self.set_speed_from_command(self.initial_speed)
 
     def get_status(self, eventtime):
         tachometer_status = self.tachometer.get_status(eventtime)
         return {
-            'speed': self.last_req_value,
+            'power': self.last_pwm_value,
+            'value': self.last_fan_value,
+            'speed': self.last_fan_value * self.max_power,
             'rpm': tachometer_status['rpm'],
         }
 

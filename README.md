@@ -12,7 +12,6 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Enable 'exclude_object' by default https://github.com/KalicoCrew/kalico/pull/306
 - Enable 'respond' by default https://github.com/KalicoCrew/kalico/pull/306
 - Allow config includes to use subfolder globs - https://github.com/Klipper3d/klipper/pull/6375
-- Auto Backup printer.cfg with all includes - https://github.com/KalicoCrew/kalico/pull/153
 - Execute a linux command/script from within Klipper - https://github.com/Klipper3d/klipper/pull/2173
 - Be able to define a cpu for every MCU
 - Sensorless retract dist fix - https://github.com/KalicoCrew/kalico/pull/109
@@ -29,3 +28,24 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448
 - bugfix Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486
 - Added Before Restart Hook
+- Added [auto_reload] Module to detect changes in printer.cfg and automatically call RELOAD_GCODE_MACROS
+- Added Autotuning for Stepper Drivers bassed on TMC Spreadsheets
+- Added option to reference variable in [include] statements
+- Added conditional includes
+- Added evaluation of arithmetic expressions in printer.cfg
+- Added BDSensor as part of Klipper - https://github.com/markniu/Bed_Distance_sensor
+- Fixed Alias pins lookup for Probes
+- Added default values to ConfigParser
+- Added min/max operation to ArithmeticParser
+- Added abs/round operation to ArithmeticParser
+- Added proper logging for homing procedure
+- Added value overrides in ConfigParser
+- Probe: implement use_probe_xy_offsets - https://github.com/KalicoCrew/kalico/pull/500
+- MCU: expose non critical status - https://github.com/KalicoCrew/kalico/pull/473
+- GCODE: adds LOG_ROLLOVER gcode command to trigger a log rollover - https://github.com/KalicoCrew/kalico/pull/498
+- Added RESET_VELOCITY_LIMIT command to reset velocity limits - https://github.com/KalicoCrew/kalico/pull/472
+- Add TMC5160 short_conf - https://github.com/KalicoCrew/kalico/pull/444
+- Add initial_speed value for fans - https://github.com/KalicoCrew/kalico/pull/436
+- Add jinja2's loopcontrols extension - https://github.com/KalicoCrew/kalico/pull/442
+- Revert speed for UI compatibility - https://github.com/KalicoCrew/kalico/pull/428
+- Accept ACCEL_PER_HZ in TEST_RESONANCES - https://github.com/KalicoCrew/kalico/pull/312

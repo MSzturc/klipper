@@ -89,7 +89,16 @@ class Template:
 class PrinterGCodeMacro:
     def __init__(self, config):
         self.printer = config.get_printer()
-        self.env = jinja2.Environment('{%', '%}', '{', '}')
+        self.env = jinja2.Environment(
+            "{%",
+            "%}",
+            "{",
+            "}",
+            extensions=[
+                "jinja2.ext.do",
+                "jinja2.ext.loopcontrols",
+            ],
+        )
         self.gcode = self.printer.lookup_object("gcode")
         self.gcode.register_command(
             "RELOAD_GCODE_MACROS", self.cmd_RELOAD_GCODE_MACROS
