@@ -267,27 +267,53 @@ FieldFormatters.update({
 
 VREF = 0.325
 
+GLOBALSCALER_ERROR = (
+    "[tmc5160 %s]\n"
+    "GLOBALSCALER out of bounds: %d\n"
+    "The target current can't be achieved with the given "
+    "CS value of %d.\n"
+    "A value of %d may be a reasonable starting point.\n"
+    "Please refer to the tmc5160.xlxs chopper tuning spreadsheet.\n"
+)
+
 class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
     DEFAULT_SENSE_RESISTOR = 0.075
     DEFAULT_MAX_CURRENT = 10.000
 
     def __init__(self, config, mcu_tmc):
         super().__init__(config, mcu_tmc)
-        self.cs = config.getint('current_scale', 0, minval=0, maxval=31)
         gscaler, irun, ihold = self._calc_current(
             self.req_run_current, self.req_hold_current
         )
         self.fields.set_field("globalscaler", gscaler)
         self.fields.set_field("ihold", ihold)
         self.fields.set_field("irun", irun)
+
     def _calc_globalscaler(self, current):
         cs = self._calc_current_bits(current)
-        globalscaler = int(
-            (current * 256.0 * math.sqrt(2.0) * self.sense_resistor * 32 / (
-            VREF * (1 + cs))) + 0.5)
-        globalscaler = max(32, globalscaler)
-        if globalscaler >= 256:
-            globalscaler = 0
+        Ipeak = current * math.sqrt(2.0)
+        
+        # Global Scaler berechnen
+        numerator = Ipeak * 32 * 256 * self.sense_resistor
+        denominator = (cs + 1) * VREF
+        globalscaler = int(math.ceil(numerator / denominator))
+
+        # Sonderfall: globalscaler == 256
+        if globalscaler == 256:
+            return 0
+
+        # Fehlerfall: globalscaler < 32 (ausgenommen 0) oder globalscaler > 256
+        if 1 <= globalscaler <= 31 or globalscaler > 256:
+            cs_calculated = int(math.ceil(self.sense_resistor * 32 * Ipeak / 0.32) - 1)
+            self.printer.invoke_shutdown(
+                GLOBALSCALER_ERROR % (
+                    self.name,
+                    globalscaler,
+                    self.cs,
+                    cs_calculated,
+                )
+            )
+
         return globalscaler
     def _calc_current_bits(self, current):
         if self.cs > 0:
