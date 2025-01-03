@@ -749,7 +749,7 @@ class BaseTMCCurrentHelper:
         self.voltage = config.getfloat('voltage', default=None, minval=0.0, maxval=60.0)
 
         self.extra_hysteresis = config.getint('extra_hysteresis', default=0,
-                                              minval=0, maxval=8)
+                                              minval=0, maxval=15)
 
         self.tbl = config.getint('driver_TBL', default=None, minval=0, maxval=3)
         self.toff = config.getint('driver_TOFF', default=None, minval=1, maxval=15)
