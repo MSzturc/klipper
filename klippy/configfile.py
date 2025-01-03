@@ -373,15 +373,25 @@ class ConfigFileReader:
 
     def _expand_all_values(self, fileconfig):
         """
-        Calls .get() for every section/option (which triggers interpolation
-        and arithmetic evaluation) and writes that result back into the parser
-        via .set(). This overwrites the original raw value (with ${...})
-        in the config.
+        Calls .get() for each section/option (which triggers interpolation and
+        arithmetic evaluation) and writes the result back. We extend the logic here
+        so that entries with "None" are removed.
         """
         for section in fileconfig.sections():
-            for option in fileconfig.options(section):
-                val = fileconfig.get(section, option)  # triggers interpolation
-                fileconfig.set(section, option, val)   # overwrites the raw value
+            # We need to store the options temporarily because
+            # otherwise, when removing (remove_option), we would be
+            # iterating over a list that is changing.
+            options = fileconfig.options(section)
+            for option in options:
+                val = fileconfig.get(section, option)  # Triggers interpolation
+                if val == "None":
+                    # => If the interpolated value is "None",
+                    #    remove this entry entirely.
+                    fileconfig.remove_option(section, option)
+                else:
+                    # => Otherwise, overwrite the raw value
+                    #    with the interpolated version.
+                    fileconfig.set(section, option, val)
 
     def _resolve_include(self, source_filename, include_spec, fileconfig, visited):
         """
