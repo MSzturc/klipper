@@ -860,7 +860,7 @@ class BaseTMCCurrentHelper:
         self.set_actual_current(new_current)
         self.apply_current(print_time)
         if self.driver_tuning is not None:
-            self.tune_driver(new_current, print_time)
+            self.tune_driver(new_current)
 
     def set_driver_velocity_field(self, field, velocity):
         register = self.fields.lookup_register(field, None)
@@ -879,7 +879,7 @@ class BaseTMCCurrentHelper:
         self.fields.set_field(field, arg)
 
     # Adjusts the driver settings to operate at a new current level.
-    def tune_driver(self, new_current, print_time=None):
+    def tune_driver(self, new_current):
         logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
         force_move = self.printer.lookup_object("force_move")
         self.stepper = force_move.lookup_stepper(self.name)
