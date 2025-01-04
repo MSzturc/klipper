@@ -267,6 +267,7 @@ class TMCCommandHelper:
         for reg_name in list(self.fields.registers.keys()):
             val = self.fields.registers[reg_name] # Val may change during loop
             self.mcu_tmc.set_register(reg_name, val, print_time)
+        self.current_helper.tune_driver()
     cmd_INIT_TMC_help = "Initialize TMC stepper driver registers"
     def cmd_INIT_TMC(self, gcmd):
         logging.info("INIT_TMC %s", self.name)
@@ -859,8 +860,7 @@ class BaseTMCCurrentHelper:
 
         self.set_actual_current(new_current)
         self.apply_current(print_time)
-        if self.driver_tuning is not None:
-            self.tune_driver(new_current)
+        self.tune_driver(new_current)
 
     def set_driver_velocity_field(self, field, velocity):
         register = self.fields.lookup_register(field, None)
@@ -879,8 +879,15 @@ class BaseTMCCurrentHelper:
         self.fields.set_field(field, arg)
 
     # Adjusts the driver settings to operate at a new current level.
-    def tune_driver(self, new_current):
-        logging.info(f"tmc {self.name} run_current: {self.config_run_current}")
+    def tune_driver(self, new_current=0):
+        
+        if self.driver_tuning is None:
+            return
+
+        # When driver gets initialized
+        if new_current == 0:
+            new_current = self.config_run_current
+
         logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
         force_move = self.printer.lookup_object("force_move")
         self.stepper = force_move.lookup_stepper(self.name)
