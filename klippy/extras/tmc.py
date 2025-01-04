@@ -880,6 +880,7 @@ class BaseTMCCurrentHelper:
 
     # Adjusts the driver settings to operate at a new current level.
     def tune_driver(self, new_current):
+        logging.info(f"tmc {self.name} run_current: {self.config_run_current}")
         logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
         force_move = self.printer.lookup_object("force_move")
         self.stepper = force_move.lookup_stepper(self.name)
