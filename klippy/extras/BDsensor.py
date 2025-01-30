@@ -12,7 +12,7 @@ from mcu import MCU, MCU_trsync
 from . import manual_probe
 from . import probe
 BD_TIMER = 0.600
-TRSYNC_TIMEOUT = 0.025
+TRSYNC_TIMEOUT = 0.05
 TRSYNC_SINGLE_MCU_TIMEOUT = 0.250
 
 CMD_READ_DATA = 1015
