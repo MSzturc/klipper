@@ -262,6 +262,7 @@ class Homing:
         logging.info(f"Homed position set to: {filled_pos}")
 
     def _set_current_homing(self, homing_axes, pre_homing):
+        logging.info(f"Adjusting Current for homing axes: {homing_axes}")
         # Adjust current settings for homing on the specified axes.
         print_time = self.toolhead.get_last_move_time()
         affected_rails = set()
@@ -279,7 +280,6 @@ class Homing:
                     dwell_time = max(dwell_time, current_dwell_time)
         if dwell_time:
             self.toolhead.dwell(dwell_time)
-        logging.debug(f"Current settings adjusted for homing axes: {homing_axes}")
 
     def _reset_endstop_states(self, endstops):
         # Reset the states of all specified endstops.
