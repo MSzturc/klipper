@@ -50,3 +50,4 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Revert speed for UI compatibility - https://github.com/KalicoCrew/kalico/pull/428
 - Accept ACCEL_PER_HZ in TEST_RESONANCES - https://github.com/KalicoCrew/kalico/pull/312
 - Set second_homing_speed to homing_speed for sensorless homing - https://github.com/KalicoCrew/kalico/pull/549
+- Freeze Garbage Collection objects after startup - https://github.com/Klipper3d/klipper/pull/6794
