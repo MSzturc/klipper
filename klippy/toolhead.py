@@ -707,6 +707,14 @@ class ToolHead:
             "square_corner_velocity: %.6f" % self.square_corner_velocity,
         )
         gcmd.respond_info("\n".join(msg), log=False)
+        
+    def set_accel(self, accel):
+        self.max_accel = accel
+        self._calc_junction_deviation()
+
+    def reset_accel(self):
+        self.max_accel = self.orig_cfg["max_accel"]
+        self._calc_junction_deviation()
 
 def add_printer_objects(config):
     config.get_printer().add_object('toolhead', ToolHead(config))
