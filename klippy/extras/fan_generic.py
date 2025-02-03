@@ -12,6 +12,7 @@ class PrinterFanGeneric:
         self.printer = config.get_printer()
         self.fan = fan.Fan(config, default_shutdown_speed=0.)
         self.fan_name = config.get_name().split()[-1]
+        self.fan_id = config.get('id', None)
 
         # Template handling
         self.template_eval = output_pin.lookup_template_eval(config)
@@ -21,6 +22,12 @@ class PrinterFanGeneric:
                                    self.fan_name,
                                    self.cmd_SET_FAN_SPEED,
                                    desc=self.cmd_SET_FAN_SPEED_help)
+        
+        if self.fan_id is not None:
+            gcode.register_mux_command("SET_FAN_SPEED", "FAN",
+                                    self.fan_id,
+                                    self.cmd_SET_FAN_SPEED,
+                                    desc=self.cmd_SET_FAN_SPEED_help)
 
     def get_status(self, eventtime):
         return self.fan.get_status(eventtime)
