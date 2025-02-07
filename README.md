@@ -50,6 +50,12 @@ Based on Klipper v0.12.0, enhanced with the following additional features:
 - Revert speed for UI compatibility - https://github.com/KalicoCrew/kalico/pull/428
 - Accept ACCEL_PER_HZ in TEST_RESONANCES - https://github.com/KalicoCrew/kalico/pull/312
 - Set second_homing_speed to homing_speed for sensorless homing - https://github.com/KalicoCrew/kalico/pull/549
+- Added PA Tower Calibration Method - https://klipper.discourse.group/t/extruder-pa-synchronization-with-input-shaping/3843
+- Added Ringing Tower Calibration Method - https://klipper.discourse.group/t/alternative-ringing-tower-print-for-input-shaping-calibration/4517
+- Added Support for Non linear Pressure Advanced - https://klipper.discourse.group/t/modification-of-pressure-advance-for-high-speed-bowden-printers/13053
+- Sync Extruder Motion with Input Shaper - https://klipper.discourse.group/t/extruder-pa-synchronization-with-input-shaping/3843
+- Added High Precision Stepping Protocol - https://klipper.discourse.group/t/improved-stepcompress-implementation/3203
+- Added support for smooth input shapers - https://klipper.discourse.group/t/scurve-pa-branch/7621/4
 - Freeze Garbage Collection objects after startup - https://github.com/Klipper3d/klipper/pull/6794
 - Allow homing_accel to be configurable - https://github.com/KalicoCrew/kalico/pull/474
 - Added MUTE Parameter in BED_MESH_CALIBRATE
