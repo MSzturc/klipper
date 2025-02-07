@@ -261,7 +261,16 @@ class Homing:
         self.toolhead.set_position(filled_pos)
         logging.info(f"Homed position set to: {filled_pos}")
 
+    def _set_homing_accel(self, accel, pre_homing):
+        if accel is None:
+            return
+        if pre_homing:
+            self.toolhead.set_accel(accel)
+        else:
+            self.toolhead.reset_accel()
+
     def _set_current_homing(self, homing_axes, pre_homing):
+        logging.info(f"Adjusting Current for homing axes: {homing_axes}")
         # Adjust current settings for homing on the specified axes.
         print_time = self.toolhead.get_last_move_time()
         affected_rails = set()
@@ -279,7 +288,6 @@ class Homing:
                     dwell_time = max(dwell_time, current_dwell_time)
         if dwell_time:
             self.toolhead.dwell(dwell_time)
-        logging.debug(f"Current settings adjusted for homing axes: {homing_axes}")
 
     def _reset_endstop_states(self, endstops):
         # Reset the states of all specified endstops.
@@ -306,6 +314,7 @@ class Homing:
         logging.debug(f"Homing info retrieved: {hi}")
 
         hmove = HomingMove(self.printer, endstops)
+        self._set_homing_accel(hi.accel, pre_homing=True)
         self._set_current_homing(homing_axes, pre_homing=True)
         self._reset_endstop_states(endstops)
         logging.debug(f"Endstops reset. Performing homing move to {homepos} at speed {hi.speed}")
@@ -360,6 +369,7 @@ class Homing:
                     raise self.printer.command_error(error_message)
 
         self._set_current_homing(homing_axes, pre_homing=False)
+        self._set_homing_accel(hi.accel, pre_homing=False)
         self.toolhead.flush_step_generation()
         logging.debug("Homing settings reset after final movement.")
 

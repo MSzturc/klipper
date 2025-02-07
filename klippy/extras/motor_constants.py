@@ -47,7 +47,7 @@ class MotorConstants:
             calculated_freq = fclk * factor 
             if calculated_freq < target:
                 return prescaler, round(calculated_freq, 1)
-    def hysteresis(self,name, extra, fclk, volts, current, tbl, toff, rsense,scale):
+    def hysteresis(self,name, extra, fclk, volts, current, tbl, toff, rsense, scale):
         I = (current if current > 0.0 else self.I) * math.sqrt(2)
         
         logging.info(f"tmc {name} ::: calculating hysteresis")

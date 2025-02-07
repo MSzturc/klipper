@@ -388,6 +388,8 @@ class TMCCommandHelper:
                              self.stepper_name)
                 self.printer.lookup_object('toolhead').wait_moves()
                 self._handle_sync_mcu_pos(self.stepper)
+            logging.info(f"Tuning TMC Driver for stepper: {self.stepper}")
+            self.current_helper.tune_driver()
         except self.printer.command_error as e:
             self.printer.invoke_shutdown(str(e))
     def _do_disable(self, print_time):
@@ -749,7 +751,7 @@ class BaseTMCCurrentHelper:
         self.voltage = config.getfloat('voltage', default=None, minval=0.0, maxval=60.0)
 
         self.extra_hysteresis = config.getint('extra_hysteresis', default=0,
-                                              minval=0, maxval=8)
+                                              minval=0, maxval=15)
 
         self.tbl = config.getint('driver_TBL', default=None, minval=0, maxval=3)
         self.toff = config.getint('driver_TOFF', default=None, minval=1, maxval=15)
@@ -859,8 +861,7 @@ class BaseTMCCurrentHelper:
 
         self.set_actual_current(new_current)
         self.apply_current(print_time)
-        if self.driver_tuning is not None:
-            self.tune_driver(new_current, print_time)
+        self.tune_driver(new_current)
 
     def set_driver_velocity_field(self, field, velocity):
         register = self.fields.lookup_register(field, None)
@@ -879,7 +880,15 @@ class BaseTMCCurrentHelper:
         self.fields.set_field(field, arg)
 
     # Adjusts the driver settings to operate at a new current level.
-    def tune_driver(self, new_current, print_time=None):
+    def tune_driver(self, new_current=0):
+        
+        if self.driver_tuning is None:
+            return
+
+        # When driver gets initialized
+        if new_current == 0:
+            new_current = self.config_run_current
+
         logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
         force_move = self.printer.lookup_object("force_move")
         self.stepper = force_move.lookup_stepper(self.name)

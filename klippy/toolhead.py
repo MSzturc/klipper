@@ -300,7 +300,7 @@ class ToolHead:
                                             self._handle_shutdown)
         # Load some default modules
         modules = ["gcode_move", "homing", "idle_timeout", "statistics",
-                   "manual_probe", "tuning_tower"]
+                   "manual_probe", "tuning_tower", "garbage_collection"]
         for module_name in modules:
             self.printer.load_object(config, module_name)
     def get_active_rails_for_axis(self, axis):
@@ -707,6 +707,14 @@ class ToolHead:
             "square_corner_velocity: %.6f" % self.square_corner_velocity,
         )
         gcmd.respond_info("\n".join(msg), log=False)
+        
+    def set_accel(self, accel):
+        self.max_accel = accel
+        self._calc_junction_deviation()
+
+    def reset_accel(self):
+        self.max_accel = self.orig_cfg["max_accel"]
+        self._calc_junction_deviation()
 
 def add_printer_objects(config):
     config.get_printer().add_object('toolhead', ToolHead(config))

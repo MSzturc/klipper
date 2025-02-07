@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import math, logging, collections
-import chelper
+import chelper, msgproto
 
 class error(Exception):
     pass
@@ -18,10 +18,11 @@ MIN_BOTH_EDGE_DURATION = 0.000000200
 
 # Interface to low-level mcu and chelper code
 class MCU_stepper:
-    def __init__(self, name, step_pin_params, dir_pin_params,
-                 rotation_dist, steps_per_rotation,
+    def __init__(self, name, high_precision_stepcompr, step_pin_params,
+                 dir_pin_params, rotation_dist, steps_per_rotation,
                  step_pulse_duration=None, units_in_radians=False):
         self._name = name
+        self._high_precision_stepcompr = high_precision_stepcompr
         self._rotation_dist = rotation_dist
         self._steps_per_rotation = steps_per_rotation
         self._step_pulse_duration = step_pulse_duration
@@ -42,8 +43,12 @@ class MCU_stepper:
         self._reset_cmd_tag = self._get_position_cmd = None
         self._active_callbacks = []
         ffi_main, ffi_lib = chelper.get_ffi()
-        self._stepqueue = ffi_main.gc(ffi_lib.stepcompress_alloc(oid),
-                                      ffi_lib.stepcompress_free)
+        if high_precision_stepcompr:
+            self._stepqueue = ffi_main.gc(ffi_lib.stepcompress_hp_alloc(oid),
+                                          ffi_lib.stepcompress_free)
+        else:
+            self._stepqueue = ffi_main.gc(ffi_lib.stepcompress_alloc(oid),
+                                          ffi_lib.stepcompress_free)
         ffi_lib.stepcompress_set_invert_sdir(self._stepqueue, self._invert_dir)
         self._mcu.register_stepqueue(self._stepqueue)
         self._stepper_kinematics = None
@@ -95,8 +100,19 @@ class MCU_stepper:
                                       invert_step, step_pulse_ticks))
         self._mcu.add_config_cmd("reset_step_clock oid=%d clock=0"
                                  % (self._oid,), on_restart=True)
-        step_cmd_tag = self._mcu.lookup_command(
-            "queue_step oid=%c interval=%u count=%hu add=%hi").get_command_tag()
+        if self._high_precision_stepcompr:
+            try:
+                step_cmd_tag = self._mcu.lookup_command(
+                    "queue_step_hp oid=%c interval=%u count=%hu "
+                    "add=%hi add2=%hi shift=%hi").get_command_tag()
+            except msgproto.MessageParser.error as e:
+                cerror = self._mcu.get_printer().config_error
+                raise cerror(str(e) + ", maybe MCU firmware was compiled " +
+                             "without high precision stepping support?")
+        else:
+            step_cmd_tag = self._mcu.lookup_command(
+                "queue_step oid=%c interval=%u count=%hu "
+                "add=%hi").get_command_tag()
         dir_cmd_tag = self._mcu.lookup_command(
             "set_next_step_dir oid=%c dir=%c").get_command_tag()
         self._reset_cmd_tag = self._mcu.lookup_command(
@@ -253,8 +269,10 @@ def PrinterStepper(config, units_in_radians=False):
         config, units_in_radians, True)
     step_pulse_duration = config.getfloat('step_pulse_duration', None,
                                           minval=0., maxval=.001)
-    mcu_stepper = MCU_stepper(name, step_pin_params, dir_pin_params,
-                              rotation_dist, steps_per_rotation,
+    high_precision_stepcompr = config.getboolean('high_precision_step_compress',
+                                                 False)
+    mcu_stepper = MCU_stepper(name, high_precision_stepcompr, step_pin_params,
+                              dir_pin_params, rotation_dist, steps_per_rotation,
                               step_pulse_duration, units_in_radians)
     # Register with helper modules
     for mname in ['stepper_enable', 'force_move', 'motion_report']:
@@ -344,19 +362,24 @@ class PrinterRail:
                 "position_endstop in section '%s' must be between"
                 " position_min and position_max" % config.get_name())
         # Homing mechanics
+        self.use_sensorless_homing = config.getboolean(
+            "use_sensorless_homing", endstop_is_virtual)
         self.homing_speed = config.getfloat('homing_speed', 5.0, above=0.)
+        default_second_homing_speed = self.homing_speed / 2.
+        if self.use_sensorless_homing:
+            default_second_homing_speed = self.homing_speed
         self.second_homing_speed = config.getfloat(
-            'second_homing_speed', self.homing_speed/2., above=0.)
+            "second_homing_speed", default_second_homing_speed, above=0.
+        )
         self.homing_retract_speed = config.getfloat(
             'homing_retract_speed', self.homing_speed, above=0.)
         self.homing_retract_dist = config.getfloat(
             'homing_retract_dist', 5., minval=0.)
         self.homing_positive_dir = config.getboolean(
             'homing_positive_dir', None)
-        self.use_sensorless_homing = config.getboolean(
-            "use_sensorless_homing", endstop_is_virtual)
         self.min_home_dist = config.getfloat(
             "min_home_dist", self.homing_retract_dist, minval=0.0)
+        self.homing_accel = config.getfloat("homing_accel", None, above=0.0)
         if self.homing_positive_dir is None:
             axis_len = self.position_max - self.position_min
             if self.position_endstop <= self.position_min + axis_len / 4.:
@@ -386,11 +409,11 @@ class PrinterRail:
     def get_homing_info(self):
         homing_info = collections.namedtuple('homing_info', [
             'speed', 'position_endstop', 'retract_speed', 'retract_dist',
-            'positive_dir', 'second_homing_speed','use_sensorless_homing','min_home_dist'])(
+            'positive_dir', 'second_homing_speed','use_sensorless_homing','min_home_dist', 'accel'])(
                 self.homing_speed, self.position_endstop,
                 self.homing_retract_speed, self.homing_retract_dist,
                 self.homing_positive_dir, self.second_homing_speed,
-                self.use_sensorless_homing, self.min_home_dist)
+                self.use_sensorless_homing, self.min_home_dist,self.homing_accel)
         return homing_info
     def get_steppers(self):
         return list(self.steppers)
