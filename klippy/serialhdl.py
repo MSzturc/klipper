@@ -83,7 +83,7 @@ class SerialReader:
             self.ffi_lib.serialqueue_alloc(serial_dev.fileno(),
                                            serial_fd_type, client_id),
             self.ffi_lib.serialqueue_free)
-        self.background_thread = threading.Thread(target=self._bg_thread)
+        self.background_thread = threading.Thread(target=self._bg_thread, name='klippy_serial')
         self.background_thread.start()
         # Obtain and load the data dictionary from the firmware
         completion = self.reactor.register_callback(self._get_identify_data)

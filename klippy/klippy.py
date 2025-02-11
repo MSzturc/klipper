@@ -418,4 +418,7 @@ def main():
         sys.exit(-1)
 
 if __name__ == '__main__':
+    import namedthreads
+    namedthreads.patch()
+    namedthreads.set_thread_name("klippy_main")
     main()

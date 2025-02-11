@@ -684,6 +684,9 @@ serialqueue_alloc(int serial_fd, char serial_fd_type, int client_id)
     ret = pthread_create(&sq->tid, NULL, background_thread, sq);
     if (ret)
         goto fail;
+    ret = pthread_setname_np(sq->tid, "klippy_cserial");
+    if (ret)
+        goto fail;
 
     return sq;
 
