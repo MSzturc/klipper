@@ -681,7 +681,20 @@ serialqueue_alloc(int serial_fd, char serial_fd_type, int client_id)
     ret = pthread_mutex_init(&sq->fast_reader_dispatch_lock, NULL);
     if (ret)
         goto fail;
-    ret = pthread_create(&sq->tid, NULL, background_thread, sq);
+
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    struct sched_param schedparam;
+    memset(&schedparam, 0, sizeof(schedparam));
+    schedparam.sched_priority = 19;
+    pthread_attr_setschedpolicy(&attr, SCHED_RR);
+    pthread_attr_setschedparam(&attr, &schedparam);
+
+    pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED);
+
+
+    ret = pthread_create(&sq->tid, &attr, background_thread, sq);
+    pthread_attr_destroy(&attr);
     if (ret)
         goto fail;
     ret = pthread_setname_np(sq->tid, "klippy_cserial");
