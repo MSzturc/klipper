@@ -32,7 +32,7 @@ class QueueListener(logging.handlers.TimedRotatingFileHandler):
                 self, filename, when="midnight", backupCount=5
             )
         self.bg_queue = queue.Queue()
-        self.bg_thread = threading.Thread(target=self._bg_thread)
+        self.bg_thread = threading.Thread(target=self._bg_thread, name='klippy_logger')
         self.bg_thread.start()
         self.rollover_info = {}
     def _bg_thread(self):
