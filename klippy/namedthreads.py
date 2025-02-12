@@ -2,6 +2,8 @@ import ctypes
 import ctypes.util
 import threading
 import logging
+import os
+
 # this is mostly copied from https://github.com/beniwohli/namedthreads/blob/master/namedthreads.py
 # itself copied from https://bugs.python.org/issue15500#msg230736
 def make_pthread_setname_np():
@@ -38,13 +40,22 @@ def patch():
         return
     orig_start = threading.Thread.start
     def start(self):
+        name = self.name
+
+        if name == 'klippy_serial':
+            os.setpriority(os.PRIO_PROCESS,0,-16)
+
+        if name == 'klippy_logger':
+            os.setpriority(os.PRIO_PROCESS,0,-12)
+
         orig_start(self)
         try:
-            name = self.name
             if name:
                 set_thread_name(name, self)
         except Exception as e:
             logging.warn("Failed to set thread name for %r: %s", self, e)
+        os.setpriority(os.PRIO_PROCESS,0,-14)
+
     start._namedthreads_patched = True
     start._namedthreads_orig = threading.Thread.start
     threading.Thread.start = start
