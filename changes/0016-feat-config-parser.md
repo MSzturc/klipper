@@ -1,0 +1,8 @@
+- Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448
+- Added option to reference variable in [include] statements
+- Added conditional includes
+- Added evaluation of arithmetic expressions in printer.cfg
+- Added default values to ConfigParser
+- Added min/max operation to ArithmeticParser
+- Added abs/round operation to ArithmeticParser
+- Added value overrides in ConfigParser
