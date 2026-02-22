@@ -1,0 +1,1 @@
+- Added Curve Fan Control - https://github.com/DangerKlippers/danger-klipper/pull/193/files
