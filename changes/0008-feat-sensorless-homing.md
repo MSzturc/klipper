@@ -1,3 +1,4 @@
 - Improved Sensorless Homing implementation - https://github.com/KalicoCrew/kalico/pull/90 / https://github.com/KalicoCrew/kalico/pull/65
 - Sensorless retract dist fix - https://github.com/KalicoCrew/kalico/pull/109
 - Sensorless rehome check traveled distance - https://github.com/KalicoCrew/kalico/pull/110
+- Allow multiple current helpers per rail - https://github.com/KalicoCrew/kalico/pull/117

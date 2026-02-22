@@ -351,8 +351,9 @@ class GenericPrinterRail:
         self.endstops = []
         self.endstop_map = {}
         self.endstop_pin = config.get('endstop_pin')
-        self._tmc_current_helpers = None
-
+        self._tmc_current_helpers = [
+            s.get_tmc_current_helper() for s in self.steppers
+        ]
         # Primary endstop position
         self.query_endstops = self.printer.load_object(config, 'query_endstops')
         mcu_endstop = self.lookup_endstop(self.endstop_pin, self.name)
@@ -419,12 +420,7 @@ class GenericPrinterRail:
                 return self.name[8:]
             return self.name.split()[-1]
         return self.name
-    
     def get_tmc_current_helpers(self):
-        if self._tmc_current_helpers is None:
-            self._tmc_current_helpers = [
-                s.get_tmc_current_helper() for s in self.steppers
-            ]
         return self._tmc_current_helpers
     def get_range(self):
         return self.position_min, self.position_max
