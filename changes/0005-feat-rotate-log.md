@@ -1,0 +1,2 @@
+- Rotate log file at every Restart - https://github.com/KalicoCrew/kalico/pull/181
+- added LOG_ROLLOVER gcode command to trigger a log rollover - https://github.com/KalicoCrew/kalico/pull/498
