@@ -1,2 +1,3 @@
 - Stepstick Lookup Table - https://github.com/KalicoCrew/kalico/pull/340
 - Add function in configfile to warn - https://github.com/KalicoCrew/kalico/pull/141
+- Added Autotuning for Stepper Drivers bassed on TMC Spreadsheets
