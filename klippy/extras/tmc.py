@@ -267,7 +267,6 @@ class TMCCommandHelper:
         for reg_name in list(self.fields.registers.keys()):
             val = self.fields.registers[reg_name] # Val may change during loop
             self.mcu_tmc.set_register(reg_name, val, print_time)
-        self.current_helper.tune_driver()
     cmd_INIT_TMC_help = "Initialize TMC stepper driver registers"
     def cmd_INIT_TMC(self, gcmd):
         logging.info("INIT_TMC %s", self.name)
@@ -389,6 +388,8 @@ class TMCCommandHelper:
                              self.stepper_name)
                 self.printer.lookup_object('toolhead').wait_moves()
                 self._handle_sync_mcu_pos(self.stepper)
+            logging.info(f"Tuning TMC Driver for stepper: {self.stepper}")
+            self.current_helper.tune_driver()
         except self.printer.command_error as e:
             self.printer.invoke_shutdown(str(e))
     def _do_disable(self, print_time):
