@@ -1,0 +1,1 @@
+- Accept ACCEL_PER_HZ in TEST_RESONANCES - https://github.com/KalicoCrew/kalico/pull/312
