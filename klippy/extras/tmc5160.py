@@ -260,13 +260,14 @@ FieldFormatters.update({
 ######################################################################
 
 VREF = 0.325
-MAX_CURRENT = 10.000 # Maximum dependent on board, but 10 is safe sanity check
 
 class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
+    DEFAULT_SENSE_RESISTOR = 0.075
+    DEFAULT_MAX_CURRENT = 10.000
+
     def __init__(self, config, mcu_tmc):
-        super().__init__(config, mcu_tmc, MAX_CURRENT)
+        super().__init__(config, mcu_tmc)
         self.cs = config.getint('current_scale', 0, minval=0, maxval=31)
-        self.sense_resistor = config.getfloat('sense_resistor', 0.075, above=0.)
         gscaler, irun, ihold = self._calc_current(
             self.req_run_current, self.req_hold_current
         )
@@ -308,7 +309,6 @@ class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
             run_current,
             hold_current,
             self.req_hold_current,
-            MAX_CURRENT,
             self.req_home_current,
         )
     
