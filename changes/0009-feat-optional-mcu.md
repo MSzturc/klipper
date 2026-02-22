@@ -1,0 +1,2 @@
+- Added optional MCU support - https://github.com/KalicoCrew/kalico/pull/339
+- MCU: expose non critical status - https://github.com/KalicoCrew/kalico/pull/473
