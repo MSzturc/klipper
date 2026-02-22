@@ -1,0 +1,1 @@
+- Added Normalized Fan PWM power - https://github.com/DangerKlippers/danger-klipper/pull/44
