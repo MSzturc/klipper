@@ -7,3 +7,4 @@
 - Sensorless: return to run current
 - Sensorless: revert current when raising errors
 - Sensorless: Reset endstop states before first home
+- Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
