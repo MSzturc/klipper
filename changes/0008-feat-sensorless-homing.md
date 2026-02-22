@@ -1,1 +1,2 @@
 - Improved Sensorless Homing implementation - https://github.com/KalicoCrew/kalico/pull/90 / https://github.com/KalicoCrew/kalico/pull/65
+- Sensorless retract dist fix - https://github.com/KalicoCrew/kalico/pull/109
