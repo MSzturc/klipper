@@ -120,6 +120,13 @@ class TMC2660CurrentHelper:
         self.fields = mcu_tmc.get_fields()
         self.current = config.getfloat('run_current', minval=0.1,
                                        maxval=MAX_CURRENT)
+        self._home_current = config.getfloat(
+            "home_current", self.current, above=0.0, maxval=MAX_CURRENT
+        )
+        self.current_change_dwell_time = config.getfloat(
+            "current_change_dwell_time", 0.5, above=0.0
+        )
+        self._prev_current = self.current
         self.sense_resistor = config.getfloat('sense_resistor')
         vsense, cs = self._calc_current(self.current)
         self.fields.set_field("cs", cs)
@@ -133,6 +140,11 @@ class TMC2660CurrentHelper:
                                                 self._handle_printing)
             self.printer.register_event_handler("idle_timeout:ready",
                                                 self._handle_ready)
+    def needs_home_current_change(self):
+        return self._home_current != self.current
+
+    def set_home_current(self, new_home_current):
+        self._home_current = min(MAX_CURRENT, new_home_current)
 
     def _calc_current_bits(self, current, vsense):
         vref = 0.165 if vsense else 0.310
@@ -177,11 +189,25 @@ class TMC2660CurrentHelper:
             self.mcu_tmc.set_register("DRVCONF", val, print_time)
 
     def get_current(self):
-        return self.current, None, None, MAX_CURRENT
+        return (
+            self.current,
+            None,
+            None,
+            MAX_CURRENT,
+            self._home_current,
+        )
 
     def set_current(self, run_current, hold_current, print_time):
         self.current = run_current
         self._update_current(run_current, print_time)
+
+    def set_current_for_homing(self, print_time):
+        prev_run_cur, _, _, _, _ = self.get_current()
+        self._prev_current = prev_run_cur
+        self.set_current(self._home_current, None, print_time)
+
+    def set_current_for_normal(self, print_time):
+        self.set_current(self._prev_current, None, print_time)
 
 
 ######################################################################
