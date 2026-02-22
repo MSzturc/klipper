@@ -292,25 +292,53 @@ class TMCCommandHelper:
     cmd_SET_TMC_CURRENT_help = "Set the current of a TMC driver"
     def cmd_SET_TMC_CURRENT(self, gcmd):
         ch = self.current_helper
-        prev_cur, prev_hold_cur, req_hold_cur, max_cur = ch.get_current()
+        (
+            prev_cur,
+            prev_hold_cur,
+            req_hold_cur,
+            max_cur,
+            prev_home_cur,
+        ) = ch.get_current()
         run_current = gcmd.get_float('CURRENT', None, minval=0., maxval=max_cur)
         hold_current = gcmd.get_float('HOLDCURRENT', None,
                                       above=0., maxval=max_cur)
-        if run_current is not None or hold_current is not None:
-            if run_current is None:
+        home_current = gcmd.get_float(
+            "HOMECURRENT", None, above=0.0, maxval=max_cur
+        )
+        if (
+            run_current is not None
+            or hold_current is not None
+            or home_current is not None
+        ):
+            if run_current is not None:
+                ch.set_run_current(run_current)
+            else:
                 run_current = prev_cur
             if hold_current is None:
                 hold_current = req_hold_cur
+            if home_current is not None:
+                ch.set_home_current(home_current)
             toolhead = self.printer.lookup_object('toolhead')
             print_time = toolhead.get_last_move_time()
             ch.set_current(run_current, hold_current, print_time)
-            prev_cur, prev_hold_cur, req_hold_cur, max_cur = ch.get_current()
+            (
+                prev_cur,
+                prev_hold_cur,
+                req_hold_cur,
+                max_cur,
+                prev_home_cur,
+            ) = ch.get_current()
         # Report values
         if prev_hold_cur is None:
-            gcmd.respond_info("Run Current: %0.2fA" % (prev_cur,))
+            gcmd.respond_info(
+                "Run Current: %0.2fA Home Current: %0.2fA"
+                % (prev_cur, prev_home_cur)
+            )
         else:
-            gcmd.respond_info("Run Current: %0.2fA Hold Current: %0.2fA"
-                              % (prev_cur, prev_hold_cur))
+            gcmd.respond_info(
+                "Run Current: %0.2fA Hold Current: %0.2fA Home Current: %0.2fA"
+                % (prev_cur, prev_hold_cur, prev_home_cur)
+            )
     # Stepper phase tracking
     def _get_phases(self):
         return (256 >> self.fields.get_field("mres")) * 4
@@ -380,6 +408,7 @@ class TMCCommandHelper:
         # Lookup stepper object
         force_move = self.printer.lookup_object("force_move")
         self.stepper = force_move.lookup_stepper(self.stepper_name)
+        self.stepper.set_tmc_current_helper(self.current_helper)
         # Note pulse duration and step_both_edge optimizations available
         self.stepper.setup_default_pulse_duration(.000000100, True)
     def _handle_stepper_enable(self, print_time, is_enable):
@@ -626,6 +655,74 @@ def TMCStealthchopHelper(config, mcu_tmc):
     else:
         # TMC2208 uses en_spreadCycle
         fields.set_field("en_spreadcycle", not en_pwm_mode)
+
+class BaseTMCCurrentHelper:
+    def __init__(self, config, mcu_tmc, max_current):
+        self.printer = config.get_printer()
+        self.name = config.get_name().split()[-1]
+        self.mcu_tmc = mcu_tmc
+        self.fields = mcu_tmc.get_fields()
+
+        # config_{run|hold|home}_current
+        # represents an initial value set via config file
+        self.config_run_current = config.getfloat(
+            "run_current", above=0.0, maxval=max_current
+        )
+        self.config_hold_current = config.getfloat(
+            "hold_current", max_current, above=0.0, maxval=max_current
+        )
+        self.config_home_current = config.getfloat(
+            "home_current",
+            self.config_run_current,
+            above=0.0,
+            maxval=max_current,
+        )
+        self.current_change_dwell_time = config.getfloat(
+            "current_change_dwell_time", 0.5, above=0.0
+        )
+
+        # req_{run|hold|home}_current
+        # represents a requested value, which starts with
+        # the configured value but can change during runtime
+        # e.g. SET_TMC_CURRENT
+        self.req_run_current = self.config_run_current
+        self.req_hold_current = self.config_hold_current
+        self.req_home_current = self.config_home_current
+
+        # actual_current represents the actual current set to a stepper
+        # It fluctuates between req_run_current and req_home_current
+        # during homing
+        self.actual_current = self.req_run_current
+        self.max_current = max_current
+
+    def get_max_current(self):
+        return self.max_current
+
+    def set_home_current(self, new_home_current):
+        self.req_home_current = min(self.max_current, new_home_current)
+
+    def set_run_current(self, new_run_current):
+        self.req_run_current = min(self.max_current, new_run_current)
+
+    def set_hold_current(self, new_hold_current):
+        self.req_hold_current = new_hold_current
+
+    def needs_current_changes(self, run_current, hold_current, force=False):
+        if (
+            run_current == self.actual_current
+            and hold_current == self.req_hold_current
+            and not force
+        ):
+            return False
+        return True
+
+    def set_current(self, new_current, hold_current, print_time, force=False):
+        if not self.needs_current_changes(new_current, hold_current, force):
+            return
+        if hold_current != self.req_hold_current:
+            self.req_hold_current = hold_current
+        self.actual_current = new_current
+        self.apply_current(print_time)
 
 # Helper to configure StallGuard and CoolStep minimum velocity
 def TMCVcoolthrsHelper(config, mcu_tmc):

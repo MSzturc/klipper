@@ -112,16 +112,12 @@ FieldFormatters.update({
 
 MAX_CURRENT = 2.400
 
-class TMC2660CurrentHelper:
+class TMC2660CurrentHelper(tmc.BaseTMCCurrentHelper):
     def __init__(self, config, mcu_tmc):
-        self.printer = config.get_printer()
-        self.name = config.get_name().split()[-1]
-        self.mcu_tmc = mcu_tmc
-        self.fields = mcu_tmc.get_fields()
-        self.current = config.getfloat('run_current', minval=0.1,
-                                       maxval=MAX_CURRENT)
+        super().__init__(config, mcu_tmc, MAX_CURRENT)
+        self.current = self.req_run_current
         self.sense_resistor = config.getfloat('sense_resistor')
-        vsense, cs = self._calc_current(self.current)
+        vsense, cs = self._calc_current(self.req_run_current)
         self.fields.set_field("cs", cs)
         self.fields.set_field("vsense", vsense)
 
@@ -160,10 +156,12 @@ class TMC2660CurrentHelper:
     def _handle_printing(self, print_time):
         print_time -= 0.100 # Schedule slightly before deadline
         self.printer.get_reactor().register_callback(
-            (lambda ev: self._update_current(self.current, print_time)))
+            (lambda ev: self._update_current(self.req_run_current, print_time)))
 
     def _handle_ready(self, print_time):
-        current = self.current * float(self.idle_current_percentage) / 100.
+        current = (
+            self.req_run_current * float(self.idle_current_percentage) / 100.0
+        )
         self.printer.get_reactor().register_callback(
             (lambda ev: self._update_current(current, print_time)))
 
@@ -177,12 +175,17 @@ class TMC2660CurrentHelper:
             self.mcu_tmc.set_register("DRVCONF", val, print_time)
 
     def get_current(self):
-        return self.current, None, None, MAX_CURRENT
+        return (
+            self.req_run_current,
+            None,
+            None,
+            MAX_CURRENT,
+            self.req_home_current,
+        )
 
     def set_current(self, run_current, hold_current, print_time):
         self.current = run_current
         self._update_current(run_current, print_time)
-
 
 ######################################################################
 # TMC2660 SPI

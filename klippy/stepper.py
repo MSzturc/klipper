@@ -58,6 +58,11 @@ class MCU_stepper:
         self._trapq = ffi_main.NULL
         self._mcu.get_printer().register_event_handler('klippy:connect',
                                                        self._query_mcu_position)
+        self._tmc_current_helper = None
+    def get_tmc_current_helper(self):
+        return self._tmc_current_helper
+    def set_tmc_current_helper(self, tmc_current_helper):
+        self._tmc_current_helper = tmc_current_helper
     def get_mcu(self):
         return self._mcu
     def get_name(self, short=False):
@@ -346,6 +351,8 @@ class GenericPrinterRail:
         self.endstops = []
         self.endstop_map = {}
         self.endstop_pin = config.get('endstop_pin')
+        self._tmc_current_helpers = None
+
         # Primary endstop position
         self.query_endstops = self.printer.load_object(config, 'query_endstops')
         mcu_endstop = self.lookup_endstop(self.endstop_pin, self.name)
@@ -356,6 +363,10 @@ class GenericPrinterRail:
         else:
             self.position_endstop = config.getfloat(
                 'position_endstop', default_position_endstop)
+        # check for ":virtual_endstop" to make sure we don't detect ":z_virtual_endstop"
+        endstop_is_virtual = (
+            self.endstop_pin is not None and ":virtual_endstop" in self.endstop_pin
+        )
         # Axis range
         if need_position_minmax:
             self.position_min = config.getfloat('position_min', 0.)
@@ -370,15 +381,24 @@ class GenericPrinterRail:
                 "position_endstop in section '%s' must be between"
                 " position_min and position_max" % config.get_name())
         # Homing mechanics
+        self.use_sensorless_homing = config.getboolean(
+            "use_sensorless_homing", endstop_is_virtual)
         self.homing_speed = config.getfloat('homing_speed', 5.0, above=0.)
+        default_second_homing_speed = self.homing_speed / 2.
+        if self.use_sensorless_homing:
+            default_second_homing_speed = self.homing_speed
         self.second_homing_speed = config.getfloat(
-            'second_homing_speed', self.homing_speed/2., above=0.)
+            "second_homing_speed", default_second_homing_speed, above=0.
+        )
         self.homing_retract_speed = config.getfloat(
             'homing_retract_speed', self.homing_speed, above=0.)
         self.homing_retract_dist = config.getfloat(
             'homing_retract_dist', 5., minval=0.)
         self.homing_positive_dir = config.getboolean(
             'homing_positive_dir', None)
+        self.min_home_dist = config.getfloat(
+            "min_home_dist", self.homing_retract_dist, minval=0.0)
+        self.homing_accel = config.getfloat("homing_accel", None, above=0.0)
         if self.homing_positive_dir is None:
             axis_len = self.position_max - self.position_min
             if self.position_endstop <= self.position_min + axis_len / 4.:
@@ -404,15 +424,22 @@ class GenericPrinterRail:
                 return self.name[8:]
             return self.name.split()[-1]
         return self.name
+    def get_tmc_current_helpers(self):
+        if self._tmc_current_helpers is None:
+            self._tmc_current_helpers = [
+                s.get_tmc_current_helper() for s in self.steppers
+            ]
+        return self._tmc_current_helpers
     def get_range(self):
         return self.position_min, self.position_max
     def get_homing_info(self):
         homing_info = collections.namedtuple('homing_info', [
             'speed', 'position_endstop', 'retract_speed', 'retract_dist',
-            'positive_dir', 'second_homing_speed'])(
+            'positive_dir', 'second_homing_speed','use_sensorless_homing','min_home_dist', 'accel'])(
                 self.homing_speed, self.position_endstop,
                 self.homing_retract_speed, self.homing_retract_dist,
-                self.homing_positive_dir, self.second_homing_speed)
+                self.homing_positive_dir, self.second_homing_speed,
+                self.use_sensorless_homing, self.min_home_dist,self.homing_accel)
         return homing_info
     def get_steppers(self):
         return list(self.steppers)
