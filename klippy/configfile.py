@@ -233,7 +233,7 @@ class ConfigFileReader:
             return include_spec
 
         include_glob = os.path.join(dirname, include_spec)
-        include_filenames = glob.glob(include_glob)
+        include_filenames = glob.glob(include_glob, recursive=True)
         if not include_filenames and not glob.has_magic(include_glob):
             # Empty set is OK if wildcard but not for direct file reference
             raise error(f"Include file '{include_glob}' does not exist")
