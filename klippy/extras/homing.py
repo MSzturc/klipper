@@ -229,6 +229,13 @@ class Homing:
                     dwell_time = max(dwell_time, current_dwell_time)
         if dwell_time:
             self.toolhead.dwell(dwell_time)
+    def _set_homing_accel(self, accel, pre_homing):
+        if accel is None:
+            return
+        if pre_homing:
+            self.toolhead.set_accel(accel)
+        else:
+            self.toolhead.reset_accel()
     def _reset_endstop_states(self, endstops):
         print_time = self.toolhead.get_last_move_time()
         for endstop in endstops:
@@ -246,6 +253,7 @@ class Homing:
         endstops = [es for rail in rails for es in rail.get_endstops()]
         hi = rails[0].get_homing_info()
         hmove = HomingMove(self.printer, endstops)
+        self._set_homing_accel(hi.accel, pre_homing=True)
         self._set_current_homing(homing_axes, pre_homing=True)
         self._reset_endstop_states(endstops)
         hmove.homing_move(homepos, hi.speed)
@@ -308,6 +316,7 @@ class Homing:
                     ]
                     retractpos[2] -= hi.retract_dist * retract_times
                     self.toolhead.move(retractpos, hi.retract_speed)
+        self._set_homing_accel(hi.accel, pre_homing=False)
         self._set_current_homing(homing_axes, pre_homing=False)
         # Signal home operation complete
         self.toolhead.flush_step_generation()

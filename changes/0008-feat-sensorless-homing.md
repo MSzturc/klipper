@@ -10,3 +10,4 @@
 - Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
 - Sensorless: Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486
 - Set second_homing_speed to homing_speed for sensorless homing - https://github.com/KalicoCrew/kalico/pull/549
+- Allow homing_accel to be configurable - https://github.com/KalicoCrew/kalico/pull/474
