@@ -1,0 +1,1 @@
+- Added RELOAD_GCODE_MACROS to reload config withour restaring klipper - https://github.com/KalicoCrew/kalico/pull/305
