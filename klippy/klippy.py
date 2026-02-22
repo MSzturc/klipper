@@ -4,7 +4,7 @@
 # Copyright (C) 2016-2024  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import sys, os, gc, optparse, logging, time, collections, importlib
+import sys, os, gc, optparse, logging, time, collections, importlib, importlib.util, subprocess
 import util, reactor, queuelogger, msgproto
 import gcode, configfile, pins, mcu, toolhead, webhooks
 
@@ -372,6 +372,36 @@ def main():
         main_reactor.finalize()
         main_reactor = printer = None
         logging.info("Restarting printer")
+
+        # Path to the restart script
+        user_home = os.path.expanduser("~")        
+        script_path = os.path.join(user_home, "printer_data/config/scripts/before-restart-klipper.sh")
+
+        # Check if script exists and execute it
+        if os.path.isfile(script_path):  # Check if the script exists
+            try:
+                # Run subprocess and capture output
+                result = subprocess.run(
+                    [script_path],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,  # Capture output as text
+                    timeout=60  # Timeout to prevent infinite hanging
+                )
+                if result.stderr:
+                    logging.warning(f"{script_path} returned errors:\n{result.stderr}")
+            except subprocess.TimeoutExpired:
+                logging.error(f"{script_path} timed out")
+                break
+            except subprocess.CalledProcessError as e:
+                logging.error(f"{script_path} failed with return code {e.returncode}")
+                logging.error(f"Error output:\n{e.stderr}")
+                break
+        else:
+            logging.debug(f"{script_path} not found. Skipping script execution.")
+
+
         start_args['start_reason'] = res
         if options.rotate_log_at_restart and bglogger is not None:
             bglogger.doRollover()

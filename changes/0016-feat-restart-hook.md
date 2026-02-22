@@ -1,0 +1,1 @@
+- Added Before Restart Hook
