@@ -1,2 +1,3 @@
 - Added Normalized Fan PWM power - https://github.com/DangerKlippers/danger-klipper/pull/44
 - Add initial_speed value for fans - https://github.com/KalicoCrew/kalico/pull/436
+- Revert speed for UI compatibility - https://github.com/KalicoCrew/kalico/pull/428
