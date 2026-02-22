@@ -232,6 +232,11 @@ class ToolHead:
                                                 below=1., minval=0.)
         self.square_corner_velocity = config.getfloat(
             'square_corner_velocity', 5., minval=0.)
+        self.orig_cfg = {}
+        self.orig_cfg["max_velocity"] = self.max_velocity
+        self.orig_cfg["max_accel"] = self.max_accel
+        self.orig_cfg["min_cruise_ratio"] = self.min_cruise_ratio
+        self.orig_cfg["square_corner_velocity"] = self.square_corner_velocity
         self.junction_deviation = self.max_accel_to_decel = 0.
         self._calc_junction_deviation()
         # Input stall detection
@@ -285,6 +290,9 @@ class ToolHead:
         gcode.register_command('SET_VELOCITY_LIMIT',
                                self.cmd_SET_VELOCITY_LIMIT,
                                desc=self.cmd_SET_VELOCITY_LIMIT_help)
+        gcode.register_command('RESET_VELOCITY_LIMIT',
+                               self.cmd_RESET_VELOCITY_LIMIT,
+                               desc=self.cmd_RESET_VELOCITY_LIMIT_help)
         gcode.register_command('M204', self.cmd_M204)
         self.printer.register_event_handler("klippy:shutdown",
                                             self._handle_shutdown)
@@ -723,6 +731,20 @@ class ToolHead:
         if (max_velocity is None and max_accel is None
             and square_corner_velocity is None and min_cruise_ratio is None):
             gcmd.respond_info(msg, log=False)
+    cmd_RESET_VELOCITY_LIMIT_help = "Reset printer velocity limits"
+    def cmd_RESET_VELOCITY_LIMIT(self, gcmd):
+        self.max_velocity = self.orig_cfg["max_velocity"]
+        self.max_accel = self.orig_cfg["max_accel"]
+        self.square_corner_velocity = self.orig_cfg["square_corner_velocity"]
+        self.min_cruise_ratio = self.orig_cfg["min_cruise_ratio"]
+        self._calc_junction_deviation()
+        msg = (
+            "max_velocity: %.6f" % self.max_velocity,
+            "max_accel: %.6f" % self.max_accel,
+            "minimum_cruise_ratio: %.6f" % self.min_cruise_ratio,
+            "square_corner_velocity: %.6f" % self.square_corner_velocity,
+        )
+        gcmd.respond_info("\n".join(msg), log=False)
     def cmd_M204(self, gcmd):
         # Use S for accel
         accel = gcmd.get_float('S', None, above=0.)
@@ -744,6 +766,21 @@ class ToolHead:
     def reset_accel(self):
         self.max_accel = self.orig_cfg["max_accel"]
         self._calc_junction_deviation()
+
+    cmd_RESET_VELOCITY_LIMIT_help = "Reset printer velocity limits"
+    def cmd_RESET_VELOCITY_LIMIT(self, gcmd):
+        self.max_velocity = self.orig_cfg["max_velocity"]
+        self.max_accel = self.orig_cfg["max_accel"]
+        self.square_corner_velocity = self.orig_cfg["square_corner_velocity"]
+        self.min_cruise_ratio = self.orig_cfg["min_cruise_ratio"]
+        self._calc_junction_deviation()
+        msg = (
+            "max_velocity: %.6f" % self.max_velocity,
+            "max_accel: %.6f" % self.max_accel,
+            "minimum_cruise_ratio: %.6f" % self.min_cruise_ratio,
+            "square_corner_velocity: %.6f" % self.square_corner_velocity,
+        )
+        gcmd.respond_info("\n".join(msg), log=False)
 
 def add_printer_objects(config):
     config.get_printer().add_object('toolhead', ToolHead(config))
