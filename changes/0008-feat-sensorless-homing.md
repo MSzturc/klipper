@@ -8,3 +8,4 @@
 - Sensorless: revert current when raising errors
 - Sensorless: Reset endstop states before first home
 - Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
+- Sensorless: Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486
