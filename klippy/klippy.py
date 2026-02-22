@@ -267,6 +267,11 @@ def main():
                     help="api server unix domain socket filename")
     opts.add_option("-l", "--logfile", dest="logfile",
                     help="write log to file instead of stderr")
+    opts.add_option(
+        "--rotate-log-at-restart",
+        action="store_true",
+        help="rotate the log file at every restart",
+    )
     opts.add_option("-v", action="store_true", dest="verbose",
                     help="enable debug messages")
     opts.add_option("-o", "--debugoutput", dest="debugoutput",
@@ -299,7 +304,13 @@ def main():
     bglogger = None
     if options.logfile:
         start_args['log_file'] = options.logfile
-        bglogger = queuelogger.setup_bg_logging(options.logfile, debuglevel)
+        bglogger = queuelogger.setup_bg_logging(
+            filename=options.logfile,
+            debuglevel=debuglevel,
+            rotate_log_at_restart=options.rotate_log_at_restart,
+        )
+        if options.rotate_log_at_restart:
+            bglogger.doRollover()
     else:
         logging.getLogger().setLevel(debuglevel)
     logging.info("Starting Klippy...")
@@ -356,6 +367,8 @@ def main():
         main_reactor = printer = None
         logging.info("Restarting printer")
         start_args['start_reason'] = res
+        if options.rotate_log_at_restart and bglogger is not None:
+            bglogger.doRollover()
 
     if bglogger is not None:
         bglogger.stop()

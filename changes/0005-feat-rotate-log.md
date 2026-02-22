@@ -1,0 +1,1 @@
+- Rotate log file at every Restart - https://github.com/KalicoCrew/kalico/pull/181
