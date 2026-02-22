@@ -141,6 +141,8 @@ class Printer:
             m.add_printer_objects(config)
         for section_config in config.get_prefix_sections(''):
             self.load_object(config, section_config.get_name(), None)
+        for section_config in ["force_move", "respond", "exclude_object"]:
+            self.load_object(config, section_config, None)
         for m in [toolhead]:
             m.add_printer_objects(config)
         # Validate that there are no undefined parameters in the config file
