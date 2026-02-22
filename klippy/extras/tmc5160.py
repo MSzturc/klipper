@@ -6,7 +6,7 @@
 import math, logging
 from . import bus, tmc, tmc2130
 
-TMC_FREQUENCY=12000000.
+TMC_FREQUENCY = 12000000.
 
 Registers = {
     "GCONF":            0x00,
@@ -111,6 +111,12 @@ Fields["DRV_CONF"] = {
     "otselect":                 0x03 << 16,
     "drvstrength":              0x03 << 18,
     "filt_isense":              0x03 << 20,
+}
+Fields["SHORT_CONF"] = {
+    "s2vs_level":               0x0F << 0,
+    "s2g_level":                0x0F << 8,
+    "short_filter":             0x03 << 16,
+    "shortdelay":               0x01 << 18,
 }
 Fields["DRV_STATUS"] = {
     "sg_result":                0x3FF << 0,
@@ -246,12 +252,13 @@ Fields["THIGH"] = {
     "thigh":                    0xfffff << 0
 }
 
-SignedFields = ["cur_a", "cur_b", "sgt", "xactual", "vactual", "pwm_scale_auto"]
+SignedFields = ["cur_a", "cur_b", "sgt", "xactual", "vactual",
+                "pwm_scale_auto"]
 
 FieldFormatters = dict(tmc2130.FieldFormatters)
 FieldFormatters.update({
-    "s2vsa":            (lambda v: "1(ShortToSupply_A!)" if v else ""),
-    "s2vsb":            (lambda v: "1(ShortToSupply_B!)" if v else ""),
+    "s2vsa": (lambda v: "1(ShortToSupply_A!)" if v else ""),
+    "s2vsb": (lambda v: "1(ShortToSupply_B!)" if v else ""),
 })
 
 
@@ -260,40 +267,196 @@ FieldFormatters.update({
 ######################################################################
 
 VREF = 0.325
-MAX_CURRENT = 10.000 # Maximum dependent on board, but 10 is safe sanity check
+
+GLOBALSCALER_ERROR = (
+    "[tmc5160 %s]\n"
+    "GLOBALSCALER out of bounds: %d\n"
+    "The target current can't be achieved with the given "
+    "CS value of %d.\n"
+    "A value of %d may be a reasonable starting point.\n"
+    "Please refer to the tmc5160.xlxs chopper tuning spreadsheet.\n"
+)
+
+# Minimum GlobalScaler value considered "robust" for homing (low-noise goal).
+# Values 1-30 are technically valid but produce higher ripple current.
+HOMING_GLOBALSCALER_MIN_ROBUST = 31
+
 
 class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
+    DEFAULT_SENSE_RESISTOR = 0.075
+    DEFAULT_MAX_CURRENT    = 10.000
+
     def __init__(self, config, mcu_tmc):
-        super().__init__(config, mcu_tmc, MAX_CURRENT)
-        self.cs = config.getint('current_scale', 0, minval=0, maxval=31)
-        self.sense_resistor = config.getfloat('sense_resistor', 0.075, above=0.)
+        super().__init__(config, mcu_tmc)
         gscaler, irun, ihold = self._calc_current(
             self.req_run_current, self.req_hold_current
         )
         self.fields.set_field("globalscaler", gscaler)
-        self.fields.set_field("ihold", ihold)
-        self.fields.set_field("irun", irun)
+        self.fields.set_field("ihold",        ihold)
+        self.fields.set_field("irun",         irun)
+
+    # ------------------------------------------------------------------
+    # RUN-profile current calculation (unchanged)
+    # ------------------------------------------------------------------
+
     def _calc_globalscaler(self, current):
+        """Compute GlobalScaler for a given current / CS combination.
+
+        RUN optimisation goal: GlobalScaler as HIGH as possible (≈255)
+        so that DAC headroom is maximised.
+        """
         cs = self._calc_current_bits(current)
-        globalscaler = int(
-            (current * 256.0 * math.sqrt(2.0) * self.sense_resistor * 32 / (
-            VREF * (1 + cs))) + 0.5)
-        globalscaler = max(32, globalscaler)
-        if globalscaler >= 256:
-            globalscaler = 0
+        Ipeak = current * math.sqrt(2.0)
+
+        numerator   = Ipeak * 32 * 256 * self.sense_resistor
+        denominator = (cs + 1) * VREF
+        globalscaler = int(math.ceil(numerator / denominator))
+
+        # Sonderfall: globalscaler == 256  → encoded as 0
+        if globalscaler == 256:
+            return 0
+
+        # Fehlerfall: globalscaler < 32 (ausgenommen 0) oder > 256
+        if 1 <= globalscaler <= 31 or globalscaler > 256:
+            cs_calculated = int(
+                math.ceil(self.sense_resistor * 32 * Ipeak / 0.32) - 1)
+            self.printer.invoke_shutdown(
+                GLOBALSCALER_ERROR % (
+                    self.name,
+                    globalscaler,
+                    self.cs if self.cs else cs,
+                    cs_calculated,
+                )
+            )
+
         return globalscaler
+
     def _calc_current_bits(self, current):
-        if self.cs > 0:
+        """Return irun/ihold CS value.
+
+        If user fixed driver_CS → clamp and use that.
+        Otherwise compute from current formula.
+        """
+        if self.cs:            # driver_CS fixed by user (non-zero)
             return max(0, min(31, self.cs))
         Ipeak = current * math.sqrt(2)
         Rsens = self.sense_resistor
-        cs = int(math.ceil(Rsens * 32 * Ipeak / 0.32) - 1)
+        cs    = int(math.ceil(Rsens * 32 * Ipeak / 0.32) - 1)
         return max(0, min(31, cs))
+
     def _calc_current(self, run_current, hold_current):
         gscaler = self._calc_globalscaler(run_current)
-        irun = self._calc_current_bits(run_current)
-        ihold = self._calc_current_bits(min(hold_current, run_current))
+        irun    = self._calc_current_bits(run_current)
+        ihold   = self._calc_current_bits(min(hold_current, run_current))
         return gscaler, irun, ihold
+
+    # ------------------------------------------------------------------
+    # HOMING current calculation  (new, "low-noise" goal)
+    # ------------------------------------------------------------------
+
+    def _calc_homing_current(self, homing_current):
+        """Compute (globalscaler, irun, ihold) for the HOMING profile.
+
+        Low-noise goal:
+          - Use homing_cs if explicitly set in config (independent from driver_CS).
+          - Otherwise search the LARGEST CS value for which the required
+            GlobalScaler is still >= HOMING_GLOBALSCALER_MIN_ROBUST (31).
+            Larger CS = smaller GlobalScaler = less quantisation noise.
+            The search iterates CS from 31 downward; first candidate whose
+            GS requirement fits in [31..255] wins.
+          - Then compute the exact GlobalScaler for the chosen CS.
+          - driver_CS (RUN profile) is intentionally IGNORED here.
+
+        Returns (globalscaler, irun, ihold).
+        GlobalScaler == 0 encodes 256 (full scale) per TMC5160 datasheet.
+        """
+        Ipeak = homing_current * math.sqrt(2.0)
+        Rsens = self.sense_resistor
+
+        # --- Determine CS for homing ---
+        # Priority: homing_cs cfg  →  HOMING_DEFAULTS["cs"]
+        # driver_CS (RUN profile) is intentionally NEVER used here.
+        if self.homing_cs is not None:
+            cs = max(0, min(31, self.homing_cs))
+            logging.info(
+                "tmc %s ::: HOMING current: CS=%d (from homing_cs cfg)",
+                self.name, cs)
+        else:
+            # Start from HOMING_DEFAULTS["cs"] (low-noise starting point).
+            # If the requested current exceeds what CS=default can deliver
+            # (GS would exceed 255), auto-increment CS until it fits.
+            # This avoids silent current clamping while keeping CS as low
+            # as possible for noise reduction.
+            cs_default = max(0, min(31, tmc.HOMING_DEFAULTS["cs"]))
+            cs = cs_default
+            for candidate_cs in range(cs_default, 32):
+                gs_check = Ipeak * 32 * 256 * Rsens / ((candidate_cs + 1) * VREF)
+                if gs_check <= 255:
+                    cs = candidate_cs
+                    break
+            else:
+                cs = 31  # saturate at max
+            if cs != cs_default:
+                logging.info(
+                    "tmc %s ::: HOMING current: CS default=%d insufficient "
+                    "for %.3fA, auto-raised to CS=%d",
+                    self.name, cs_default, homing_current, cs)
+            else:
+                logging.info(
+                    "tmc %s ::: HOMING current: CS=%d (from HOMING_DEFAULTS)",
+                    self.name, cs)
+
+        # --- Compute exact GlobalScaler for chosen CS ---
+        numerator    = Ipeak * 32 * 256 * Rsens
+        denominator  = (cs + 1) * VREF
+        globalscaler = int(round(numerator / denominator))
+
+        # Clamp / encode per TMC5160 datasheet rules
+        if globalscaler >= 256:
+            globalscaler = 0   # 0 encodes 256 (full scale)
+            logging.info(
+                "tmc %s ::: HOMING GlobalScaler encoded as 0 (=256, full scale) "
+                "for CS=%d", self.name, cs)
+        elif 1 <= globalscaler <= 30:
+            # Below robust minimum – clamp up to 31.
+            # This means actual current will be slightly lower than requested,
+            # which is safe (conservative).
+            logging.warning(
+                "tmc %s ::: HOMING GlobalScaler %d < 31, clamping to 31. "
+                "Actual current will be slightly lower than %.3fA.",
+                self.name, globalscaler, homing_current)
+            globalscaler = 31
+        elif globalscaler == 0:
+            # Computed exactly 0 from rounding – treat as 256
+            globalscaler = 0
+
+        # irun = ihold during homing for cleanest StallGuard signal
+        irun  = max(0, min(31, cs))
+        ihold = irun
+
+        logging.info(
+            "tmc %s ::: HOMING current result: "
+            "globalscaler=%d (raw=%d), irun=%d, ihold=%d, target=%.3fA",
+            self.name,
+            globalscaler if globalscaler != 0 else 256,
+            globalscaler, irun, ihold, homing_current)
+        return globalscaler, irun, ihold
+
+    def _apply_homing_current(self, homing_current):
+        """Write HOMING current registers to shadow (flush done by caller)."""
+        gscaler, irun, ihold = self._calc_homing_current(homing_current)
+        self.fields.set_field("globalscaler", gscaler)
+        self.fields.set_field("irun",         irun)
+        self.fields.set_field("ihold",        ihold)
+        logging.info(
+            "tmc %s ::: _apply_homing_current: "
+            "globalscaler=%d irun=%d ihold=%d",
+            self.name, gscaler, irun, ihold)
+
+    # ------------------------------------------------------------------
+    # Public current interface
+    # ------------------------------------------------------------------
+
     def _calc_current_from_field(self, field_name):
         globalscaler = self.fields.get_field("globalscaler")
         if not globalscaler:
@@ -301,21 +464,31 @@ class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
         bits = self.fields.get_field(field_name)
         return (globalscaler * (bits + 1) * VREF
                 / (256. * 32. * math.sqrt(2.) * self.sense_resistor))
+
     def get_current(self):
-        run_current = self._calc_current_from_field("irun")
+        run_current  = self._calc_current_from_field("irun")
         hold_current = self._calc_current_from_field("ihold")
         return (
             run_current,
             hold_current,
             self.req_hold_current,
-            MAX_CURRENT,
             self.req_home_current,
         )
-    
+
     def apply_current(self, print_time):
-        gscaler, irun, ihold = self._calc_current(
-            self.actual_current, self.req_hold_current
-        )
+        # Use _homing_active to select the correct formula.
+        # Comparing current values is unreliable when req_home_current
+        # equals req_run_current (e.g. stepper_z at 0.5A for both).
+        if self._homing_active:
+            gscaler, irun, ihold = self._calc_homing_current(
+                self.actual_current)
+            logging.info(
+                "tmc %s ::: apply_current HOMING path: "
+                "gscaler=%d irun=%d ihold=%d current=%.3fA",
+                self.name, gscaler, irun, ihold, self.actual_current)
+        else:
+            gscaler, irun, ihold = self._calc_current(
+                self.actual_current, self.req_hold_current)
         val = self.fields.set_field("globalscaler", gscaler)
         self.mcu_tmc.set_register("GLOBALSCALER", val, print_time)
         self.fields.set_field("ihold", ihold)
@@ -331,15 +504,19 @@ class TMC5160:
         # Setup mcu communication
         self.fields = tmc.FieldHelper(Fields, SignedFields, FieldFormatters)
         self.mcu_tmc = tmc2130.MCU_TMC_SPI(config, Registers, self.fields,
-                                           TMC_FREQUENCY)
+                                            TMC_FREQUENCY)
         # Allow virtual pins to be created
-        tmc.TMCVirtualPinHelper(config, self.mcu_tmc)
+        # IMPORTANT: keep reference so we can wire up the current helper
+        self._virtual_pin_helper = tmc.TMCVirtualPinHelper(
+            config, self.mcu_tmc)
         # Register commands
         current_helper = TMC5160CurrentHelper(config, self.mcu_tmc)
+        # Wire VirtualPinHelper → CurrentHelper so homing profile switching works
+        self._virtual_pin_helper.set_current_helper(current_helper)
         cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc, current_helper)
         cmdhelper.setup_register_dump(ReadRegisters)
         self.get_phase_offset = cmdhelper.get_phase_offset
-        self.get_status = cmdhelper.get_status
+        self.get_status       = cmdhelper.get_status
         # Setup basic register values
         tmc.TMCWaveTableHelper(config, self.mcu_tmc)
         tmc.TMCStealthchopHelper(config, self.mcu_tmc)
@@ -350,44 +527,60 @@ class TMC5160:
         #   GCONF
         set_config_field(config, "multistep_filt", True)
         #   CHOPCONF
-        set_config_field(config, "toff", 3)
-        set_config_field(config, "hstrt", 5)
-        set_config_field(config, "hend", 2)
-        set_config_field(config, "fd3", 0)
+        set_config_field(config, "toff",    3)
+        set_config_field(config, "hstrt",   5)
+        set_config_field(config, "hend",    2)
+        set_config_field(config, "fd3",     0)
         set_config_field(config, "disfdcc", 0)
-        set_config_field(config, "chm", 0)
-        set_config_field(config, "tbl", 2)
+        set_config_field(config, "chm",     0)
+        set_config_field(config, "tbl",     2)
         set_config_field(config, "vhighfs", 0)
         set_config_field(config, "vhighchm", 0)
-        set_config_field(config, "tpfd", 4)
-        set_config_field(config, "diss2g", 0)
+        set_config_field(config, "tpfd",    4)
+        set_config_field(config, "diss2g",  0)
         set_config_field(config, "diss2vs", 0)
         #   COOLCONF
-        set_config_field(config, "semin", 0)    # page 52
-        set_config_field(config, "seup", 0)
-        set_config_field(config, "semax", 0)
-        set_config_field(config, "sedn", 0)
+        set_config_field(config, "semin",  0)
+        set_config_field(config, "seup",   0)
+        set_config_field(config, "semax",  0)
+        set_config_field(config, "sedn",   0)
         set_config_field(config, "seimin", 0)
-        set_config_field(config, "sgt", 0)
-        set_config_field(config, "sfilt", 0)
+        set_config_field(config, "sgt",    0)
+        set_config_field(config, "sfilt",  0)
         #   DRV_CONF
         set_config_field(config, "drvstrength", 0)
-        set_config_field(config, "bbmclks", 4)
-        set_config_field(config, "bbmtime", 0)
+        set_config_field(config, "bbmclks",     4)
+        set_config_field(config, "bbmtime",     0)
         set_config_field(config, "filt_isense", 0)
+        #   SHORT_CONF
+        if config.getint("driver_s2vs_level", None, 4, 15) and config.getint(
+                "driver_s2g_level", None, 2, 15):
+            set_config_field(config, "s2vs_level",   6)
+            set_config_field(config, "s2g_level",    6)
+            set_config_field(config, "short_filter", 1)
+            set_config_field(config, "shortdelay",   0)
+        elif any(
+            config.get("driver_%s" % field, None, False)
+            for field in Fields["SHORT_CONF"].keys()
+        ):
+            raise config.error(
+                "driver_s2vs_level and driver_s2g_level are required "
+                "to update short_conf"
+            )
         #   IHOLDIRUN
         set_config_field(config, "iholddelay", 6)
         #   PWMCONF
-        set_config_field(config, "pwm_ofs", 30)
-        set_config_field(config, "pwm_grad", 0)
-        set_config_field(config, "pwm_freq", 0)
+        set_config_field(config, "pwm_ofs",      30)
+        set_config_field(config, "pwm_grad",     0)
+        set_config_field(config, "pwm_freq",     0)
         set_config_field(config, "pwm_autoscale", True)
-        set_config_field(config, "pwm_autograd", True)
-        set_config_field(config, "freewheel", 0)
-        set_config_field(config, "pwm_reg", 4)
-        set_config_field(config, "pwm_lim", 12)
+        set_config_field(config, "pwm_autograd",  True)
+        set_config_field(config, "freewheel",     0)
+        set_config_field(config, "pwm_reg",      4)
+        set_config_field(config, "pwm_lim",      12)
         #   TPOWERDOWN
         set_config_field(config, "tpowerdown", 10)
+
 
 def load_config_prefix(config):
     return TMC5160(config)
