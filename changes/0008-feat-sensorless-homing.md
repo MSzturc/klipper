@@ -4,3 +4,4 @@
 - Allow multiple current helpers per rail - https://github.com/KalicoCrew/kalico/pull/117
 - Sensorless not returning to run_current after homing - https://github.com/KalicoCrew/kalico/pull/236
 - Sensorless: dwell once for all rails
+- Sensorless: return to run current
