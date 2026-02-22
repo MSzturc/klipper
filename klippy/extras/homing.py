@@ -304,6 +304,7 @@ class Homing:
                         )
                 finally:
                     self._set_current_homing(homing_axes, pre_homing=False)
+                    self._set_homing_accel(hi.accel, pre_homing=False)
                 if hi.retract_dist:
                     # Retract (again)
                     startpos = self._fill_coord(forcepos)
