@@ -92,15 +92,35 @@ class Printer:
             return self.objects[section]
         module_parts = section.split()
         module_name = module_parts[0]
-        py_name = os.path.join(os.path.dirname(__file__),
+        extras_py_name = os.path.join(os.path.dirname(__file__),
                                'extras', module_name + '.py')
-        py_dirname = os.path.join(os.path.dirname(__file__),
-                                  'extras', module_name, '__init__.py')
-        if not os.path.exists(py_name) and not os.path.exists(py_dirname):
+        extras_py_dirname = os.path.join(os.path.dirname(__file__),
+                                  'extras', module_name, '__init__.py')  
+        plugins_py_dirname = os.path.join(
+            os.path.dirname(__file__), "plugins", module_name, "__init__.py"
+        )
+        plugins_py_name = os.path.join(
+            os.path.dirname(__file__), "plugins", module_name + ".py"
+        )
+
+        found_in_extras = os.path.exists(extras_py_name) or os.path.exists(
+            extras_py_dirname
+        )
+        found_in_plugins = os.path.exists(plugins_py_name)
+
+        if not found_in_extras and not found_in_plugins:
             if default is not configfile.sentinel:
                 return default
             raise self.config_error("Unable to load module '%s'" % (section,))
-        mod = importlib.import_module('extras.' + module_name)
+
+        if found_in_plugins:
+            mod_spec = importlib.util.spec_from_file_location(
+                "extras." + module_name, plugins_py_name
+            )
+            mod = importlib.util.module_from_spec(mod_spec)
+            mod_spec.loader.exec_module(mod)
+        else:
+            mod = importlib.import_module("extras." + module_name)
         init_func = 'load_config'
         if len(module_parts) > 1:
             init_func = 'load_config_prefix'
@@ -316,23 +336,7 @@ def main():
     logging.info("Starting Klippy...")
     git_info = util.get_git_version()
     git_vers = git_info["version"]
-    extra_files = [fname for code, fname in git_info["file_status"]
-                   if (code in ('??', '!!') and fname.endswith('.py')
-                       and (fname.startswith('klippy/kinematics/')
-                            or fname.startswith('klippy/extras/')))]
-    modified_files = [fname for code, fname in git_info["file_status"]
-                      if code == 'M']
     extra_git_desc = ""
-    if extra_files:
-        if not git_vers.endswith('-dirty'):
-            git_vers = git_vers + '-dirty'
-        if len(extra_files) > 10:
-            extra_files[10:] = ["(+%d files)" % (len(extra_files) - 10,)]
-        extra_git_desc += "\nUntracked files: %s" % (', '.join(extra_files),)
-    if modified_files:
-        if len(modified_files) > 10:
-            modified_files[10:] = ["(+%d files)" % (len(modified_files) - 10,)]
-        extra_git_desc += "\nModified files: %s" % (', '.join(modified_files),)
     extra_git_desc += "\nBranch: %s" % (git_info["branch"])
     extra_git_desc += "\nRemote: %s" % (git_info["remote"])
     extra_git_desc += "\nTracked URL: %s" % (git_info["url"])
