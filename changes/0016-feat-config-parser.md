@@ -1,0 +1,1 @@
+- Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448
