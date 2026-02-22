@@ -1,0 +1,2 @@
+- Added Curve Fan Control - https://github.com/DangerKlippers/danger-klipper/pull/193/files
+- Added fan_id that could be used to reference a fan in SET_FAN_SPEED
