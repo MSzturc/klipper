@@ -1,3 +1,52 @@
 Welcome to the Klipper project!
 
 It contains the following additions:
+- Added Support for BDSensor - https://github.com/markniu/Bed_Distance_sensor
+- Added Normalized Fan PWM power - https://github.com/DangerKlippers/danger-klipper/pull/44
+- Add initial_speed value for fans - https://github.com/KalicoCrew/kalico/pull/436
+- Revert speed for UI compatibility - https://github.com/KalicoCrew/kalico/pull/428
+- Fixed TMC5160 Driver - https://github.com/Klipper3d/klipper/pull/6644
+- Added Curve Fan Control - https://github.com/DangerKlippers/danger-klipper/pull/193/files
+- Added fan_id that could be used to reference a fan in SET_FAN_SPEED
+- Rotate log file at every Restart - https://github.com/KalicoCrew/kalico/pull/181
+- added LOG_ROLLOVER gcode command to trigger a log rollover - https://github.com/KalicoCrew/kalico/pull/498
+- Allow Plugins to be installed into klipper without marking klipper installation as 'dirty'
+- Added RELOAD_GCODE_MACROS to reload config withour restaring klipper - https://github.com/KalicoCrew/kalico/pull/305
+- Added [auto_reload] Module to detect changes in printer.cfg and automatically call RELOAD_GCODE_MACROS
+- Improved Sensorless Homing implementation - https://github.com/KalicoCrew/kalico/pull/90 / https://github.com/KalicoCrew/kalico/pull/65
+- Sensorless retract dist fix - https://github.com/KalicoCrew/kalico/pull/109
+- Sensorless rehome check traveled distance - https://github.com/KalicoCrew/kalico/pull/110
+- Allow multiple current helpers per rail - https://github.com/KalicoCrew/kalico/pull/117
+- Sensorless not returning to run_current after homing - https://github.com/KalicoCrew/kalico/pull/236
+- Sensorless: dwell once for all rails
+- Sensorless: return to run current
+- Sensorless: revert current when raising errors
+- Sensorless: Reset endstop states before first home
+- Sensorless: Sensorless dwell bug - https://github.com/KalicoCrew/kalico/pull/120
+- Sensorless: Incorrect Final Z Position After Homing with Probe - https://github.com/KalicoCrew/kalico/issues/486
+- Set second_homing_speed to homing_speed for sensorless homing - https://github.com/KalicoCrew/kalico/pull/549
+- Allow homing_accel to be configurable - https://github.com/KalicoCrew/kalico/pull/474
+- Added optional MCU support - https://github.com/KalicoCrew/kalico/pull/339
+- MCU: expose non critical status - https://github.com/KalicoCrew/kalico/pull/473
+- Enable 'force move' by default - https://github.com/KalicoCrew/kalico/pull/135
+- Enable 'exclude_object' by default https://github.com/KalicoCrew/kalico/pull/306
+- Enable 'respond' by default https://github.com/KalicoCrew/kalico/pull/306
+- Allow config includes to use subfolder globs - https://github.com/Klipper3d/klipper/pull/6375
+- Execute a linux command/script from within Klipper - https://github.com/Klipper3d/klipper/pull/2173
+- Be able to define a cpu for every MCU
+- Stepstick Lookup Table - https://github.com/KalicoCrew/kalico/pull/340
+- Add function in configfile to warn - https://github.com/KalicoCrew/kalico/pull/141
+- Added Autotuning for Stepper Drivers bassed on TMC Spreadsheets
+- Add TMC5160 short_conf - https://github.com/KalicoCrew/kalico/pull/444
+- Configuration reference interpolation - https://github.com/KalicoCrew/kalico/pull/448
+- Added option to reference variable in [include] statements
+- Added conditional includes
+- Added evaluation of arithmetic expressions in printer.cfg
+- Added default values to ConfigParser
+- Added min/max operation to ArithmeticParser
+- Added abs/round operation to ArithmeticParser
+- Added value overrides in ConfigParser
+- Added Before Restart Hook
+- Add jinja2's loopcontrols extension - https://github.com/KalicoCrew/kalico/pull/442
+- Added RESET_VELOCITY_LIMIT command to reset velocity limits - https://github.com/KalicoCrew/kalico/pull/472
+

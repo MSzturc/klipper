@@ -1,3 +1,0 @@
-- Enable 'force move' by default - https://github.com/KalicoCrew/kalico/pull/135
-- Enable 'exclude_object' by default https://github.com/KalicoCrew/kalico/pull/306
-- Enable 'respond' by default https://github.com/KalicoCrew/kalico/pull/306

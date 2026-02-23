@@ -1,2 +1,0 @@
-- Added RELOAD_GCODE_MACROS to reload config withour restaring klipper - https://github.com/KalicoCrew/kalico/pull/305
-- Added [auto_reload] Module to detect changes in printer.cfg and automatically call RELOAD_GCODE_MACROS

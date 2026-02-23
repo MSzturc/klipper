@@ -1,1 +1,0 @@
-- Allow Plugins to be installed into klipper without marking klipper installation as 'dirty'

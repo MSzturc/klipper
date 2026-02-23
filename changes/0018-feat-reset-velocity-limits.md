@@ -1,1 +1,0 @@
-- Added RESET_VELOCITY_LIMIT command to reset velocity limits - https://github.com/KalicoCrew/kalico/pull/472

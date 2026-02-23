@@ -1,1 +1,0 @@
-- Added Support for BDSensor - https://github.com/markniu/Bed_Distance_sensor
