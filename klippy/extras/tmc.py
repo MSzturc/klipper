@@ -24,6 +24,7 @@ class FieldHelper:
         self.registers = registers
         if self.registers is None:
             self.registers = collections.OrderedDict()
+        self._homing_active = False
         self.field_to_register = { f: r for r, fields in self.all_fields.items()
                                    for f in fields }
     def lookup_register(self, field_name, default=None):
@@ -370,6 +371,8 @@ class TMCCommandHelper:
     # Stepper enable/disable tracking
     def _do_enable(self, print_time):
         try:
+            if self.current_helper is not None:
+                self.current_helper.tune_driver(flush=False)
             if self.toff is not None:
                 # Shared enable via comms handling
                 self.fields.set_field("toff", self.toff)
@@ -389,7 +392,7 @@ class TMCCommandHelper:
                 self.printer.lookup_object('toolhead').wait_moves()
                 self._handle_sync_mcu_pos(self.stepper)
             logging.info(f"Tuning TMC Driver for stepper: {self.stepper}")
-            self.current_helper.tune_driver()
+            self.current_helper.tune_driver(flush=True)
         except self.printer.command_error as e:
             self.printer.invoke_shutdown(str(e))
     def _do_disable(self, print_time):
@@ -496,6 +499,11 @@ class TMCCommandHelper:
 
 # Helper class for "sensorless homing"
 class TMCVirtualPinHelper:
+    HOMING_SAVE_REGISTERS = [
+        "GCONF", "CHOPCONF", "PWMCONF", "COOLCONF",
+        "TCOOLTHRS", "TPWMTHRS", "THIGH", "IHOLD_IRUN", "GLOBALSCALER",
+    ]
+
     def __init__(self, config, mcu_tmc):
         self.printer = config.get_printer()
         self.mcu_tmc = mcu_tmc
@@ -511,12 +519,52 @@ class TMCVirtualPinHelper:
             self.diag_pin = config.get('diag_pin', None)
             self.diag_pin_field = None
         self.mcu_endstop = None
+        self._current_helper = None
+        self._saved_registers = {}
         self.en_pwm = False
         self.pwmthrs = self.coolthrs = self.thigh = 0
         # Register virtual_endstop pin
         name_parts = config.get_name().split()
         ppins = self.printer.lookup_object("pins")
         ppins.register_chip("%s_%s" % (name_parts[0], name_parts[-1]), self)
+
+    def set_current_helper(self, current_helper):
+        self._current_helper = current_helper
+
+    def _save_register_state(self):
+        self._saved_registers = {}
+        for reg in self.HOMING_SAVE_REGISTERS:
+            if reg not in self.fields.registers:
+                continue
+            self._saved_registers[reg] = self.fields.registers[reg]
+        logging.info("TMC saved %d registers for homing", len(self._saved_registers))
+
+    def _restore_register_state(self):
+        for reg, val in self._saved_registers.items():
+            self.fields.registers[reg] = val
+            self.mcu_tmc.set_register(reg, val)
+        self._saved_registers = {}
+
+    def _apply_homing_fallback(self):
+        logging.info("TMC homing fallback profile active")
+        reg = self.fields.lookup_register("en_pwm_mode", None)
+        if reg is None:
+            self.fields.set_field("en_spreadcycle", 0)
+            self.fields.set_field("tpwmthrs", 0)
+        else:
+            self.fields.set_field("en_pwm_mode", 0)
+            if self.diag_pin_field is not None:
+                self.fields.set_field(self.diag_pin_field, 1)
+        self.fields.set_field("tcoolthrs", 0xfffff)
+        if self.fields.lookup_register("thigh", None) is not None:
+            self.fields.set_field("thigh", 0)
+        if self.fields.lookup_register("semin", None) is not None:
+            self.fields.set_field("semin", 0)
+        self.mcu_tmc.set_register("GCONF", self.fields.registers.get("GCONF", 0))
+        for reg_name in ["TPWMTHRS", "TCOOLTHRS", "THIGH", "COOLCONF"]:
+            if reg_name in self.fields.registers:
+                self.mcu_tmc.set_register(reg_name, self.fields.registers[reg_name])
+
     def setup_pin(self, pin_type, pin_params):
         # Validate pin
         ppins = self.printer.lookup_object('pins')
@@ -531,11 +579,15 @@ class TMCVirtualPinHelper:
                                             self.handle_homing_move_begin)
         self.printer.register_event_handler("homing:homing_move_end",
                                             self.handle_homing_move_end)
+        self.printer.register_event_handler("homing:homing_move_abort",
+                                            self.handle_homing_move_end)
         self.mcu_endstop = ppins.setup_pin('endstop', self.diag_pin)
         return self.mcu_endstop
     def handle_homing_move_begin(self, hmove):
         if self.mcu_endstop not in hmove.get_mcu_endstops():
             return
+        self._save_register_state()
+        self.fields._homing_active = True
         # Enable/disable stealthchop
         self.pwmthrs = self.fields.get_field("tpwmthrs")
         reg = self.fields.lookup_register("en_pwm_mode", None)
@@ -562,27 +614,24 @@ class TMCVirtualPinHelper:
             self.thigh = self.fields.get_field("thigh")
             th_val = self.fields.set_field("thigh", 0)
             self.mcu_tmc.set_register(reg, th_val)
+        tuned = False
+        if self._current_helper is not None:
+            try:
+                self._current_helper.tune_driver(self._current_helper.actual_current,
+                                                 flush=True)
+                tuned = True
+            except Exception:
+                logging.exception("Unable to apply tuned homing profile")
+        if not tuned:
+            self._apply_homing_fallback()
     def handle_homing_move_end(self, hmove):
         if self.mcu_endstop not in hmove.get_mcu_endstops():
             return
-        # Restore stealthchop/spreadcycle
-        reg = self.fields.lookup_register("en_pwm_mode", None)
-        if reg is None:
-            tp_val = self.fields.set_field("tpwmthrs", self.pwmthrs)
-            self.mcu_tmc.set_register("TPWMTHRS", tp_val)
-            val = self.fields.set_field("en_spreadcycle", not self.en_pwm)
-        else:
-            self.fields.set_field("en_pwm_mode", self.en_pwm)
-            val = self.fields.set_field(self.diag_pin_field, 0)
-        self.mcu_tmc.set_register("GCONF", val)
-        # Restore tcoolthrs
-        tc_val = self.fields.set_field("tcoolthrs", self.coolthrs)
-        self.mcu_tmc.set_register("TCOOLTHRS", tc_val)
-        # Restore thigh
-        reg = self.fields.lookup_register("thigh", None)
-        if reg is not None:
-            th_val = self.fields.set_field("thigh", self.thigh)
-            self.mcu_tmc.set_register(reg, th_val)
+        self.fields._homing_active = False
+        self._restore_register_state()
+        if self._current_helper is not None:
+            self._current_helper.tune_driver(self._current_helper.req_run_current,
+                                             flush=True)
 
 
 ######################################################################
@@ -669,6 +718,20 @@ PWM_FREQ_TARGETS = {"tmc2130": 55e3,
                     "tmc5160": 55e3}
 
 class BaseTMCCurrentHelper:
+    HOMING_DEFAULTS = {
+        "toff": 3,
+        "tbl": 2,
+        "hstrt": 1,
+        "hend": 2,
+        "tpfd": 4,
+        "sfilt": 1,
+        "iholddelay": 12,
+    }
+    TUNED_REGISTERS = [
+        "GCONF", "CHOPCONF", "PWMCONF", "COOLCONF", "TPWMTHRS",
+        "TCOOLTHRS", "THIGH", "IHOLD_IRUN", "GLOBALSCALER",
+    ]
+
     def __init__(self, config, mcu_tmc):
         self.printer = config.get_printer()
         self.config_file = self.printer.lookup_object("configfile")
@@ -756,10 +819,20 @@ class BaseTMCCurrentHelper:
         self.tbl = config.getint('driver_TBL', default=None, minval=0, maxval=3)
         self.toff = config.getint('driver_TOFF', default=None, minval=1, maxval=15)
         self.tpfd = config.getint('driver_TPFD', default=None, minval=0, maxval=15)
-        self.cs = config.getint('driver_CS', default=0, minval=0, maxval=31)
+        self.cs = config.getint('driver_CS', default=None, minval=0, maxval=31)
+        if self.cs is None:
+            self.cs = config.getint('driver_cs', default=None, minval=0, maxval=31)
 
         self.hstrt = config.getint('driver_HSTRT', default=None, minval=0, maxval=7)
         self.hend = config.getint('driver_HEND', default=None, minval=0, maxval=15)
+
+        self.homing_tbl = config.getint('homing_tbl', default=None, minval=0, maxval=3)
+        self.homing_toff = config.getint('homing_toff', default=None, minval=1, maxval=15)
+        self.homing_hstrt = config.getint('homing_hstrt', default=None, minval=0, maxval=7)
+        self.homing_hend = config.getint('homing_hend', default=None, minval=0, maxval=15)
+        self.homing_tpfd = config.getint('homing_tpfd', default=None, minval=0, maxval=15)
+        self.homing_sfilt = config.getint('homing_sfilt', default=None, minval=0, maxval=1)
+        self.homing_cs = config.getint('homing_cs', default=None, minval=0, maxval=31)
 
         self.sg4_thrs = config.getint('driver_SGTHRS', default=None, minval=0, maxval=255)
         self.sgt = config.getint('driver_SGT', default=None, minval=-64, maxval=63)
@@ -834,7 +907,9 @@ class BaseTMCCurrentHelper:
 
     def set_current_for_homing(self, print_time, pre_homing) -> float:
         if pre_homing and self.needs_home_current_change():
-            self.set_current(self.req_home_current, self.req_hold_current, print_time)
+            # Avoid tuning run-profile fields with homing-current during pre-homing.
+            self.set_current(self.req_home_current, self.req_hold_current,
+                             print_time, skip_tune=True)
             return self.current_change_dwell_time
         elif not pre_homing and self.needs_run_current_change():
             self.set_current(
@@ -852,7 +927,8 @@ class BaseTMCCurrentHelper:
             return False
         return True
 
-    def set_current(self, new_current, hold_current, print_time, force=False):
+    def set_current(self, new_current, hold_current, print_time,
+                    force=False, skip_tune=False):
         if not self.needs_current_changes(new_current, hold_current, force):
             return
 
@@ -861,7 +937,8 @@ class BaseTMCCurrentHelper:
 
         self.set_actual_current(new_current)
         self.apply_current(print_time)
-        self.tune_driver(new_current)
+        if not skip_tune:
+            self.tune_driver(new_current)
 
     def set_driver_velocity_field(self, field, velocity):
         register = self.fields.lookup_register(field, None)
@@ -880,7 +957,7 @@ class BaseTMCCurrentHelper:
         self.fields.set_field(field, arg)
 
     # Adjusts the driver settings to operate at a new current level.
-    def tune_driver(self, new_current=0):
+    def tune_driver(self, new_current=0, flush=True):
         
         if self.driver_tuning is None:
             return
@@ -889,18 +966,92 @@ class BaseTMCCurrentHelper:
         if new_current == 0:
             new_current = self.config_run_current
 
-        logging.info(f"tmc {self.name} ::: tune_driver for {new_current}A")
+        profile = "HOMING" if self.fields._homing_active else "RUN"
+        logging.info("tmc %s ::: tune_driver %s profile for %sA",
+                     self.name, profile, new_current)
         force_move = self.printer.lookup_object("force_move")
         self.stepper = force_move.lookup_stepper(self.name)
 
         self._get_tmc_clock_frequency()
+        if self.fields._homing_active:
+            self._apply_homing_profile(new_current)
+        else:
+            self._apply_run_profile(new_current)
+        if flush:
+            self._flush_tuned_registers()
+
+    def _apply_run_profile(self, new_current):
         self._configure_pwm(new_current)
         new_tbl, new_toff = self._configure_spreadcycle(new_current)
-        self._configure_hysteresis(new_current, new_tbl,new_toff)
+        self._configure_hysteresis(new_current, new_tbl, new_toff)
         self._configure_stallguard(new_current)
         self._configure_coolstep()
         self._configure_overvoltage()
         self._configure_highspeed(new_current)
+
+    def _apply_homing_profile(self, new_current):
+        tbl = self.homing_tbl if self.homing_tbl is not None else self.tbl
+        if tbl is None:
+            tbl = self.HOMING_DEFAULTS["tbl"]
+        toff = self.homing_toff if self.homing_toff is not None else self.toff
+        if toff is None:
+            toff = self.HOMING_DEFAULTS["toff"]
+        tpfd = self.homing_tpfd if self.homing_tpfd is not None else self.tpfd
+        if tpfd is None:
+            tpfd = self.HOMING_DEFAULTS["tpfd"]
+        hstrt = self.homing_hstrt if self.homing_hstrt is not None else self.hstrt
+        if hstrt is None:
+            hstrt = self.HOMING_DEFAULTS["hstrt"]
+        hend = self.homing_hend if self.homing_hend is not None else self.hend
+        if hend is None:
+            hend = self.HOMING_DEFAULTS["hend"]
+        sfilt = self.homing_sfilt
+        if sfilt is None:
+            sfilt = self.HOMING_DEFAULTS["sfilt"]
+        if toff == 1 and tbl < 2:
+            tbl = 2
+        effective_hyst = (hstrt + 1) + (hend - 3)
+        if effective_hyst > 16:
+            new_hend = max(0, min(15, 19 - (hstrt + 1)))
+            logging.warning("tmc %s ::: clamping homing hend %d->%d",
+                            self.name, hend, new_hend)
+            hend = new_hend
+        self._set_field_if_supported("tpwmthrs", 0)
+        self._set_field_if_supported("tbl", tbl)
+        self._set_field_if_supported("toff", toff)
+        self._set_field_if_supported("tpfd", tpfd)
+        self._set_field_if_supported("hstrt", hstrt)
+        self._set_field_if_supported("hend", hend)
+        self._set_field_if_supported("semin", 0)
+        self._set_field_if_supported("semax", 0)
+        self._set_field_if_supported("seup", 0)
+        self._set_field_if_supported("sedn", 0)
+        self._set_field_if_supported("seimin", 0)
+        self._set_field_if_supported("sfilt", sfilt)
+        self._set_field_if_supported("iholddelay", self.HOMING_DEFAULTS["iholddelay"])
+        self._set_field_if_supported("thigh", 0)
+        self._set_field_if_supported("tcoolthrs", 0xfffff)
+        if self.fields.lookup_register("en_pwm_mode", None) is not None:
+            self._set_field_if_supported("en_pwm_mode", 0)
+        else:
+            self._set_field_if_supported("en_spreadcycle", 0)
+        logging.info("tmc %s ::: homing profile: toff=%d tbl=%d hstrt=%d hend=%d tpfd=%d sfilt=%d",
+                     self.name, toff, tbl, hstrt, hend, tpfd, sfilt)
+
+    def _set_field_if_supported(self, field_name, value):
+        reg = self.fields.lookup_register(field_name, None)
+        if reg is None:
+            return False
+        self.fields.set_field(field_name, value)
+        return True
+
+    def _flush_tuned_registers(self):
+        for reg_name in self.TUNED_REGISTERS:
+            if reg_name not in self.fields.registers:
+                continue
+            val = self.fields.registers[reg_name]
+            logging.info("tmc %s ::: flush %s = 0x%08x", self.name, reg_name, val)
+            self.mcu_tmc.set_register(reg_name, val)
 
     # Retrieves the clock frequency of the TMC driver.
     # Falls back to a default value (12.5 MHz) if retrieval fails.
@@ -978,9 +1129,9 @@ class BaseTMCCurrentHelper:
 
         logging.info(f"tmc {self.name} ::: ncycles: {ncycles}, sdcycles: {sdcycles}")
 
-        if toff == 1 and tbl == 0:
-            # Ensure valid blanking time for low toff values.
-            tbl = 1
+        if toff == 1 and tbl < 2:
+            # Datasheet constraint: toff=1 requires larger blanking time.
+            tbl = 2
             tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
 
         tsd = (12.0 + 32.0 * toff) / self.driver_clock_frequency
@@ -1027,6 +1178,13 @@ class BaseTMCCurrentHelper:
                 rsense=self.sense_resistor,
                 scale=self.cs
             )
+
+        effective_hyst = (hstrt + 1) + (hend - 3)
+        if effective_hyst > 16:
+            new_hend = max(0, min(15, 19 - (hstrt + 1)))
+            logging.warning("tmc %s ::: clamping hend %d->%d",
+                            self.name, hend, new_hend)
+            hend = new_hend
 
         # Logging hysteresis values for debugging
         logging.info(f"tmc {self.name} ::: hstrt: {hstrt}, hend: {hend}, extra: {self.extra_hysteresis}")

@@ -331,7 +331,45 @@ class TMC2240CurrentHelper(tmc.BaseTMCCurrentHelper):
         gscaler = self._calc_globalscaler(run_current)
         irun = self._calc_current_bits(run_current, gscaler)
         ihold = self._calc_current_bits(min(hold_current, run_current), gscaler)
+        if self.fields._homing_active:
+            gscaler, irun = self._calc_homing_current(run_current)
         return gscaler, irun, ihold
+
+    def _calc_homing_current(self, homing_current):
+        fixed_cs = self.homing_cs if self.homing_cs is not None else self.cs
+        if fixed_cs is not None:
+            cs = max(0, min(31, fixed_cs))
+            gscaler = self._calc_globalscaler_from_cs(homing_current, cs)
+            return gscaler, cs
+        best = None
+        for cs in range(32):
+            gscaler = self._calc_globalscaler_from_cs(homing_current, cs)
+            eff = 256 if gscaler == 0 else gscaler
+            if eff < 31:
+                continue
+            current = self._calc_current_from_cs_gs(cs, eff)
+            err = abs(homing_current - current)
+            cand = (cs, err, gscaler)
+            if best is None or cand < best:
+                best = cand
+        if best is None:
+            cs = 31
+            return self._calc_globalscaler_from_cs(homing_current, cs), cs
+        cs, _err, gscaler = best
+        return gscaler, cs
+
+    def _calc_current_from_cs_gs(self, cs, globalscaler):
+        ifs_rms = self._get_ifs_rms()
+        return globalscaler * (cs + 1) * ifs_rms / (256. * 32.)
+
+    def _calc_globalscaler_from_cs(self, current, cs):
+        ifs_rms = self._get_ifs_rms()
+        gscaler = int((current * 256. * 32.) / ((cs + 1) * ifs_rms) + .5)
+        if gscaler >= 256:
+            gscaler = 0
+        if 1 <= gscaler <= 31:
+            gscaler = 31
+        return max(0, min(255, gscaler))
     def _calc_current_from_field(self, field_name):
         ifs_rms = self._get_ifs_rms()
         globalscaler = self.fields.get_field("globalscaler")
@@ -376,9 +414,10 @@ class TMC2240:
             self.mcu_tmc = tmc2130.MCU_TMC_SPI(config, Registers, self.fields,
                                                TMC_FREQUENCY)
         # Allow virtual pins to be created
-        tmc.TMCVirtualPinHelper(config, self.mcu_tmc)
+        vphelper = tmc.TMCVirtualPinHelper(config, self.mcu_tmc)
         # Register commands
         current_helper = TMC2240CurrentHelper(config, self.mcu_tmc)
+        vphelper.set_current_helper(current_helper)
         cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc, current_helper)
         cmdhelper.setup_register_dump(ReadRegisters)
         self.get_phase_offset = cmdhelper.get_phase_offset
