@@ -269,25 +269,6 @@ class Homing:
         else:
             self.toolhead.reset_accel()
 
-    def _set_current_homing(self, homing_axes, pre_homing):
-        logging.info(f"Adjusting Current for homing axes: {homing_axes}")
-        # Adjust current settings for homing on the specified axes.
-        print_time = self.toolhead.get_last_move_time()
-        affected_rails = set()
-        for axis in homing_axes:
-            axis_name = "xyz"[axis]  # Only valid for Cartesian systems
-            partial_rails = self.toolhead.get_active_rails_for_axis(axis_name)
-            affected_rails.update(partial_rails)
-
-        dwell_time = 0.0
-        for rail in affected_rails:
-            chs = rail.get_tmc_current_helpers()
-            for ch in chs:
-                if ch is not None:
-                    current_dwell_time = ch.set_current_for_homing(print_time, pre_homing)
-                    dwell_time = max(dwell_time, current_dwell_time)
-        if dwell_time:
-            self.toolhead.dwell(dwell_time)
 
     def _reset_endstop_states(self, endstops):
         # Reset the states of all specified endstops.
@@ -302,7 +283,7 @@ class Homing:
         self.printer.send_event("homing:home_rails_begin", self, rails)
 
         # Alter kinematics to consider the printer at the forced position.
-        homing_axes = [axis for axis in range(3) if forcepos[axis] is not None]
+        homing_axes = [i for i in range(3) if forcepos[i] is not None]
         startpos = self._fill_coord(forcepos)
         homepos = self._fill_coord(movepos)
         self.toolhead.set_position(startpos, homing_axes=homing_axes)
@@ -315,7 +296,6 @@ class Homing:
 
         hmove = HomingMove(self.printer, endstops)
         self._set_homing_accel(hi.accel, pre_homing=True)
-        self._set_current_homing(homing_axes, pre_homing=True)
         self._reset_endstop_states(endstops)
         logging.debug(f"Endstops reset. Performing homing move to {homepos} at speed {hi.speed}")
 
@@ -368,7 +348,6 @@ class Homing:
                     logging.error(error_message)
                     raise self.printer.command_error(error_message)
 
-        self._set_current_homing(homing_axes, pre_homing=False)
         self._set_homing_accel(hi.accel, pre_homing=False)
         self.toolhead.flush_step_generation()
         logging.debug("Homing settings reset after final movement.")
@@ -456,6 +435,7 @@ class PrinterHoming:
         logging.debug(f"Homing axes set: {axes}")
 
         kin = self.printer.lookup_object('toolhead').get_kinematics()
+        self.printer.send_event("homing:homing_start", homing_state)
         try:
             kin.home(homing_state)
             logging.info("G28 homing operation completed successfully.")
@@ -467,6 +447,8 @@ class PrinterHoming:
             logging.error("Homing operation failed. Turning off motors.")
             self.printer.lookup_object('stepper_enable').motor_off()
             raise
+        finally:
+            self.printer.send_event("homing:homing_end", homing_state)
 
 
 def load_config(config):
