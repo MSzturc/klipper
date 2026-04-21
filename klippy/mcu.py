@@ -1531,6 +1531,10 @@ class MCU:
         # abort in-flight homing when a non-critical MCU disconnects so
         # TriggerDispatch.wait_end does not block forever.
         self._trsyncs = []
+        # Accept an optional "cpu" string; Klipper itself does not consume
+        # this value - it is reserved for out-of-tree tooling that reads
+        # the printer config directly.
+        self.cpu = config.get("cpu", None)
         # Low-level connection and helpers
         self._conn_helper = MCUConnectHelper(config, self, clocksync)
         self._serial = self._conn_helper.get_serial()
