@@ -20,15 +20,17 @@ SSE_FLAGS = "-mfpmath=sse -msse2"
 NEON_FLAGS = "-mfpu=neon"
 SOURCE_FILES = [
     'pyhelper.c', 'serialqueue.c', 'stepcompress.c', 'steppersync.c',
-    'itersolve.c', 'trapq.c', 'pollreactor.c', 'msgblock.c', 'trdispatch.c',
+    'itersolve.c', 'trapq.c',
+    'pollreactor.c', 'msgblock.c', 'trdispatch.c',
     'kin_cartesian.c', 'kin_corexy.c', 'kin_corexz.c', 'kin_delta.c',
     'kin_deltesian.c', 'kin_polar.c', 'kin_rotary_delta.c', 'kin_winch.c',
-    'kin_extruder.c', 'kin_shaper.c', 'kin_idex.c', 'kin_generic.c'
+    'kin_extruder.c', 'kin_shaper.c', 'kin_idex.c', 'kin_generic.c',
 ]
 DEST_LIB = "c_helper.so"
 OTHER_FILES = [
     'list.h', 'serialqueue.h', 'stepcompress.h', 'steppersync.h',
-    'itersolve.h', 'pyhelper.h', 'trapq.h', 'pollreactor.h', 'msgblock.h'
+    'itersolve.h', 'pyhelper.h',
+    'trapq.h', 'pollreactor.h', 'msgblock.h',
 ]
 
 defs_stepcompress = """
@@ -61,18 +63,21 @@ defs_steppersync = """
         struct syncemitter *se);
     void syncemitter_queue_msg(struct syncemitter *se, uint64_t req_clock
         , uint32_t *data, int len);
+
     struct syncemitter *steppersync_alloc_syncemitter(struct steppersync *ss
         , char name[16], int alloc_stepcompress);
     void steppersync_setup_movequeue(struct steppersync *ss
         , struct serialqueue *sq, int move_num);
     void steppersync_set_time(struct steppersync *ss
         , double time_offset, double mcu_freq);
+
     struct steppersyncmgr *steppersyncmgr_alloc(void);
     void steppersyncmgr_free(struct steppersyncmgr *ssm);
     struct steppersync *steppersyncmgr_alloc_steppersync(
         struct steppersyncmgr *ssm);
     int32_t steppersyncmgr_gen_steps(struct steppersyncmgr *ssm
-        , double flush_time, double gen_steps_time, double clear_history_time);
+        , double flush_time, double gen_steps_time
+        , double clear_history_time);
 """
 
 defs_itersolve = """
@@ -159,9 +164,8 @@ defs_kin_winch = """
 
 defs_kin_extruder = """
     struct stepper_kinematics *extruder_stepper_alloc(void);
-    void extruder_stepper_free(struct stepper_kinematics *sk);
     void extruder_set_pressure_advance(struct stepper_kinematics *sk
-        , double print_time, double pressure_advance, double smooth_time);
+        , double pressure_advance, double smooth_time, double time_offset);
 """
 
 defs_kin_shaper = """
@@ -280,35 +284,11 @@ def do_build_code(cmd):
         logging.error(msg)
         raise Exception(msg)
 
-# Build the main c_helper.so c code library
-def check_build_c_library():
-    srcdir = os.path.dirname(os.path.realpath(__file__))
-    srcfiles = get_abs_files(srcdir, SOURCE_FILES)
-    ofiles = get_abs_files(srcdir, OTHER_FILES)
-    destlib = get_abs_files(srcdir, [DEST_LIB])[0]
-    if not check_build_code(srcfiles+ofiles+[__file__], destlib):
-        # Code already built
-        return destlib
-    # Select command line options
-    if check_gcc_option(SSE_FLAGS):
-        cmd = "%s %s %s" % (GCC_CMD, SSE_FLAGS, COMPILE_ARGS)
-    elif check_gcc_option(NEON_FLAGS):
-        cmd = "%s %s %s" % (GCC_CMD, NEON_FLAGS, COMPILE_ARGS)
-    else:
-        cmd = "%s %s" % (GCC_CMD, COMPILE_ARGS)
-    # Invoke compiler
-    logging.info("Building C code module %s", DEST_LIB)
-    tempdestlib = get_abs_files(srcdir, ["_temp_" + DEST_LIB])[0]
-    do_build_code(cmd % (tempdestlib, ' '.join(srcfiles)))
-    # Rename from temporary file to final file name
-    os.rename(tempdestlib, destlib)
-    return destlib
-
 FFI_main = None
 FFI_lib = None
 pyhelper_logging_callback = None
 
-# Helper invoked from C errorf() code to log errors
+# Hepler invoked from C errorf() code to log errors
 def logging_callback(msg):
     logging.error(FFI_main.string(msg))
 
@@ -316,9 +296,24 @@ def logging_callback(msg):
 def get_ffi():
     global FFI_main, FFI_lib, pyhelper_logging_callback
     if FFI_lib is None:
-        # Check if library needs to be built, and build if so
-        destlib = check_build_c_library()
-        # Open library
+        srcdir = os.path.dirname(os.path.realpath(__file__))
+        srcfiles = get_abs_files(srcdir, SOURCE_FILES)
+        ofiles = get_abs_files(srcdir, OTHER_FILES)
+        destlib = get_abs_files(srcdir, [DEST_LIB])[0]
+        if check_build_code(srcfiles+ofiles+[__file__], destlib):
+            if check_gcc_option(SSE_FLAGS):
+                cmd = "%s %s %s" % (GCC_CMD, SSE_FLAGS, COMPILE_ARGS)
+            elif check_gcc_option(NEON_FLAGS):
+                cmd = "%s %s %s" % (GCC_CMD, NEON_FLAGS, COMPILE_ARGS)
+            else:
+                cmd = "%s %s" % (GCC_CMD, COMPILE_ARGS)
+            logging.info("Building C code module %s", DEST_LIB)
+            # Build to a temp path and atomically rename so an interrupted
+            # or failed compile cannot leave a partially-written
+            # c_helper.so in place of the previous good copy.
+            tmplib = destlib + ".tmp"
+            do_build_code(cmd % (tmplib, ' '.join(srcfiles)))
+            os.rename(tmplib, destlib)
         FFI_main = cffi.FFI()
         for d in defs_all:
             FFI_main.cdef(d)
