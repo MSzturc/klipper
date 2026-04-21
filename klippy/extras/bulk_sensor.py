@@ -89,6 +89,17 @@ class BatchBulkHelper:
     def add_client(self, client_cb):
         self.client_cbs.append(client_cb)
         self._start()
+    def remove_client(self, client_cb):
+        # Unregister a previously-added client. If the list is already
+        # empty (e.g. _stop already ran) or the callback was never
+        # registered, silently ignore so callers can use this in
+        # idempotent teardown paths.
+        try:
+            self.client_cbs.remove(client_cb)
+        except ValueError:
+            return
+        if not self.client_cbs and self.is_started:
+            self._stop()
     # Webhooks registration
     def _add_api_client(self, web_request):
         whbatch = BatchWebhooksClient(web_request)

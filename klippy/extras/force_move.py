@@ -10,6 +10,9 @@ BUZZ_DISTANCE = 1.
 BUZZ_VELOCITY = BUZZ_DISTANCE / .250
 BUZZ_RADIANS_DISTANCE = math.radians(1.)
 BUZZ_RADIANS_VELOCITY = BUZZ_RADIANS_DISTANCE / .250
+# Settle delay after a force-enable so stepper-driver init (TMC register
+# reprogramming, enable-pin debounce) lands before the first queued step.
+FORCE_ENABLE_SETTLE_TIME = 0.050
 
 # Calculate a move's accel_t, cruise_t, and cruise_v
 def calc_move_time(dist, speed, accel):
@@ -65,6 +68,10 @@ class ForceMove:
         stepper_name = stepper.get_name()
         stepper_enable = self.printer.lookup_object('stepper_enable')
         did_enable = stepper_enable.set_motors_enable([stepper_name], True)
+        if did_enable:
+            # Ensure enable/tmc init lands before first queued steps.
+            toolhead = self.printer.lookup_object('toolhead')
+            toolhead.dwell(FORCE_ENABLE_SETTLE_TIME)
         return did_enable
     def _restore_enable(self, stepper, did_enable):
         if not did_enable:

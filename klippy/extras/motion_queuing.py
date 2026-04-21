@@ -93,11 +93,26 @@ class PrinterMotionQueuing:
         ffi_lib.steppersync_setup_movequeue(ss, serialqueue, move_count)
         mcu_freq = float(mcu.seconds_to_clock(1.))
         ffi_lib.steppersync_set_time(ss, 0., mcu_freq)
+    def detach_mcu_movequeue(self, mcu):
+        # Drop references to an mcu's serialqueue (typically because the
+        # serialqueue is about to be freed by a non-critical-MCU soft
+        # disconnect). The next setup_mcu_movequeue() call will rewire a
+        # fresh serialqueue into the same steppersync.
+        for ss_mcu, ss in self.steppersyncs:
+            if ss_mcu is mcu:
+                ffi_main, ffi_lib = chelper.get_ffi()
+                ffi_lib.steppersync_detach_movequeue(ss)
+                return
     def stats(self, eventtime):
         # Globally calibrate mcu clocks (and step generation clocks)
         sync_time = self.last_step_gen_time
         ffi_main, ffi_lib = chelper.get_ffi()
         for mcu, ss in self.steppersyncs:
+            # Skip calibration for non-critical MCUs that are currently
+            # offline - calibrate_clock would use stale/zero frequency.
+            if (getattr(mcu, "is_non_critical", False)
+                    and getattr(mcu, "non_critical_disconnected", False)):
+                continue
             offset, freq = mcu.calibrate_clock(sync_time, eventtime)
             ffi_lib.steppersync_set_time(ss, offset, freq)
         # Calculate history expiration

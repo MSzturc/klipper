@@ -16,6 +16,7 @@
 #include <stdlib.h> // malloc
 #include <string.h> // memset
 #include "compiler.h" // __visible
+#include "msgblock.h" // message_queue_free
 #include "pyhelper.h" // set_thread_name
 #include "itersolve.h" // itersolve_generate_steps
 #include "serialqueue.h" // struct queue_message
@@ -249,12 +250,50 @@ steppersync_setup_movequeue(struct steppersync *ss, struct serialqueue *sq
     serialqueue_free_commandqueue(ss->cq);
     free(ss->move_clocks);
 
+    // Defensive drain: any syncemitter messages left over from a prior
+    // disconnect (enqueued after detach but before this re-attach) must
+    // not be transmitted against the freshly-attached serialqueue.
+    struct syncemitter *se;
+    list_for_each_entry(se, &ss->se_list, ss_node) {
+        if (!list_empty(&se->msg_queue))
+            message_queue_free(&se->msg_queue);
+    }
+
     ss->sq = sq;
     ss->cq = serialqueue_alloc_commandqueue();
 
     ss->move_clocks = malloc(sizeof(*ss->move_clocks)*move_num);
     memset(ss->move_clocks, 0, sizeof(*ss->move_clocks)*move_num);
     ss->num_move_clocks = move_num;
+}
+
+// Drop references to a serialqueue that is about to be freed.  The
+// syncemitters keep running so they continue to enqueue messages; those
+// messages are discarded by steppersync_flush until a fresh serialqueue
+// is attached via steppersync_setup_movequeue.  Used by the non-critical
+// MCU soft-disconnect path to avoid dangling-pointer access into a freed
+// serialqueue.
+void __visible
+steppersync_detach_movequeue(struct steppersync *ss)
+{
+    ss->sq = NULL;
+    if (ss->cq) {
+        serialqueue_free_commandqueue(ss->cq);
+        ss->cq = NULL;
+    }
+    free(ss->move_clocks);
+    ss->move_clocks = NULL;
+    ss->num_move_clocks = 0;
+    // Discard any messages the syncemitters enqueued while we were
+    // tearing down. If a reconnect grafts on a fresh serialqueue before
+    // steppersync_flush runs, those stale steps must not be transmitted
+    // to the newly-booted MCU. The drainage in steppersync_flush is then
+    // belt-and-suspenders for messages enqueued AFTER detach.
+    struct syncemitter *se;
+    list_for_each_entry(se, &ss->se_list, ss_node) {
+        if (!list_empty(&se->msg_queue))
+            message_queue_free(&se->msg_queue);
+    }
 }
 
 // Set the conversion rate of 'print_time' to mcu clock
@@ -299,6 +338,17 @@ heap_replace(struct steppersync *ss, uint64_t req_clock)
 static void
 steppersync_flush(struct steppersync *ss, uint64_t move_clock)
 {
+    // When the serialqueue has been detached (non-critical MCU soft
+    // disconnect), drop any queued messages instead of accessing the
+    // dangling sq/cq/move_clocks pointers.
+    if (!ss->sq) {
+        struct syncemitter *se;
+        list_for_each_entry(se, &ss->se_list, ss_node) {
+            if (!list_empty(&se->msg_queue))
+                message_queue_free(&se->msg_queue);
+        }
+        return;
+    }
     // Order commands by the reqclock of each pending command
     struct list_head msgs;
     list_init(&msgs);

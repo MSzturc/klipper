@@ -12,10 +12,11 @@ class error(Exception):
     pass
 
 class SerialReader:
-    def __init__(self, reactor, mcu_name=""):
+    def __init__(self, reactor, mcu_name="", mcu=None):
         self.reactor = reactor
         self.warn_prefix = ""
         self.mcu_name = mcu_name
+        self.mcu = mcu
         if self.mcu_name:
             self.warn_prefix = "mcu '%s': " % (self.mcu_name)
         sq_name = ("serialq %s" % (self.mcu_name))[:15]
@@ -74,8 +75,12 @@ class SerialReader:
             try:
                 params = self.send_with_response(msg, 'identify_response')
             except error as e:
-                logging.exception("%sWait for identify_response",
-                                  self.warn_prefix)
+                if str(e) == "non-critical MCU offline":
+                    logging.info("%sWait for identify_response: %s",
+                                 self.warn_prefix, str(e))
+                else:
+                    logging.exception("%sWait for identify_response",
+                                      self.warn_prefix)
                 return None
             if params['offset'] == len(identify_data):
                 msgdata = params['data']
@@ -204,6 +209,17 @@ class SerialReader:
             ret = self._start_session(serial_dev)
             if ret:
                 break
+    def check_connect(self, serialport, baud, rts=True):
+        # Non-blocking probe: can the serial device be opened right now?
+        serial_dev = serial.Serial(baudrate=baud, timeout=0, exclusive=False)
+        serial_dev.port = serialport
+        serial_dev.rts = rts
+        try:
+            serial_dev.open()
+        except Exception:
+            return False
+        serial_dev.close()
+        return True
     def connect_file(self, debugoutput, dictionary, pace=False):
         self.serial_dev = debugoutput
         self.msgparser.process_identify(dictionary, decompress=False)
@@ -243,15 +259,39 @@ class SerialReader:
     # Serial response callbacks
     def register_response(self, callback, name, oid=None):
         with self.lock:
+            key = (name, oid)
             if callback is None:
-                del self.handlers[name, oid]
+                # pop-on-None: safe even if already removed/overwritten
+                self.handlers.pop(key, None)
             else:
-                self.handlers[name, oid] = callback
+                self.handlers[key] = callback
+    # Non-critical MCU send-suppression helper
+    def _is_noncritical_blocked(self):
+        # When the MCU is non-critical and currently offline (and not in the
+        # middle of a reconnect attempt), drop sends silently instead of
+        # raising. This keeps background callbacks from crashing Klipper
+        # while a non-critical toolhead is unplugged.
+        if self.mcu is None:
+            return False
+        if not getattr(self.mcu, "is_non_critical", False):
+            return False
+        if self.serialqueue is None:
+            return not getattr(self.mcu, "_connecting", False)
+        return (getattr(self.mcu, "non_critical_disconnected", False)
+                and not getattr(self.mcu, "_connecting", False))
     # Command sending
     def raw_send(self, cmd, minclock, reqclock, cmd_queue):
+        if self._is_noncritical_blocked():
+            return
+        if self.serialqueue is None:
+            self._error("Serial connection closed")
         self.ffi_lib.serialqueue_send(self.serialqueue, cmd_queue,
                                       cmd, len(cmd), minclock, reqclock, 0)
     def raw_send_wait_ack(self, cmd, minclock, reqclock, cmd_queue):
+        if self._is_noncritical_blocked():
+            return None
+        if self.serialqueue is None:
+            self._error("Serial connection closed")
         self.last_notify_id += 1
         nid = self.last_notify_id
         completion = self.reactor.completion()
@@ -260,6 +300,8 @@ class SerialReader:
                                       cmd, len(cmd), minclock, reqclock, nid)
         params = completion.wait()
         if params is None:
+            if getattr(self.mcu, "is_non_critical", False):
+                return None
             self._error("Serial connection closed")
         return params
     def send(self, msg, minclock=0, reqclock=0):
@@ -274,6 +316,8 @@ class SerialReader:
                                 self.ffi_lib.serialqueue_free_commandqueue)
     # Dumping debug lists
     def dump_debug(self):
+        if self.serialqueue is None:
+            return "Serial debug unavailable: queue disconnected"
         out = []
         out.append("Dumping serial stats: %s" % (
             self.stats(self.reactor.monotonic()),))
@@ -326,6 +370,16 @@ class SerialRetryCommand:
         if not retry:
             retries = 0
         while 1:
+            # Abort immediately if this is a non-critical MCU and it's offline
+            # (and not currently reconnecting). Callers should treat this as
+            # a soft failure rather than a hard timeout.
+            mcu = getattr(self.serial, "mcu", None)
+            if (mcu is not None and getattr(mcu, "is_non_critical", False)
+                    and not getattr(mcu, "_connecting", False)):
+                if (getattr(mcu, "non_critical_disconnected", False)
+                        or self.serial.serialqueue is None):
+                    self.serial.register_response(None, self.name, self.oid)
+                    raise error("non-critical MCU offline")
             for cmd in cmds[:-1]:
                 self.serial.raw_send(cmd, minclock, reqclock, cmd_queue)
             self.serial.raw_send_wait_ack(cmds[-1], minclock, reqclock,

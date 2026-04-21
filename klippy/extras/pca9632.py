@@ -33,6 +33,11 @@ class PCA9632:
         self.prev_regs = {}
         self.led_helper = led.LEDHelper(config, self.update_leds, 1)
         printer.register_event_handler("klippy:connect", self.handle_connect)
+        self.mcu = self.i2c.get_mcu()
+        if getattr(self.mcu, "is_non_critical", False):
+            printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
     def reg_write(self, reg, val, minclock=0):
         if self.prev_regs.get(reg) == val:
             return
@@ -40,6 +45,11 @@ class PCA9632:
         self.i2c.i2c_write([reg, val], minclock=minclock,
                                  reqclock=BACKGROUND_PRIORITY_CLOCK)
     def handle_connect(self):
+        if getattr(self.mcu, "non_critical_disconnected", False):
+            return
+        # The register cache must be reset so reg_write repopulates the
+        # chip after a power cycle.
+        self.prev_regs = {}
         #Configure MODE1
         self.reg_write(PCA9632_MODE1, 0x00)
         #Configure MODE2 (DIMMING, INVERT, CHANGE ON STOP,TOTEM)

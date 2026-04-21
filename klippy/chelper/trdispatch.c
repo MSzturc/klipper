@@ -209,6 +209,31 @@ trdispatch_mcu_alloc(struct trdispatch *td, struct serialqueue *sq
     return tdm;
 }
 
+// Detach a 'struct trdispatch_mcu' from its parent dispatch list.
+//
+// Non-critical MCU reconnects rebuild config callbacks against a new
+// serialqueue while the owning TriggerDispatch object persists. Unlink
+// the previous dispatch member before replacement so future
+// trdispatch_start() calls never walk stale entries bound to a dead
+// serialqueue.
+void __visible
+trdispatch_mcu_clear(struct trdispatch_mcu *tdm)
+{
+    if (!tdm || !tdm->td)
+        return;
+    struct trdispatch *td = tdm->td;
+    pthread_mutex_lock(&td->lock);
+    if (tdm->node.next && tdm->node.prev)
+        list_del(&tdm->node);
+    if (list_empty(&td->tdm_list))
+        td->is_active = td->can_trigger = 0;
+    pthread_mutex_unlock(&td->lock);
+    tdm->node.next = tdm->node.prev = NULL;
+    tdm->td = NULL;
+    tdm->sq = NULL;
+    tdm->cq = NULL;
+}
+
 // Setup for a trigger test
 void __visible
 trdispatch_mcu_setup(struct trdispatch_mcu *tdm

@@ -94,6 +94,7 @@ class HTU21D:
         self.reactor = self.printer.get_reactor()
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=HTU21D_I2C_ADDR, default_speed=100000)
+        self.mcu = self.i2c.get_mcu()
         self.hold_master_mode = config.getboolean('htu21d_hold_master',False)
         self.resolution = config.get('htu21d_resolution','TEMP12_HUM08')
         self.report_time = config.getint('htu21d_report_time',30,minval=5)
@@ -106,8 +107,16 @@ class HTU21D:
         self.printer.add_object("htu21d " + self.name, self)
         self.printer.register_event_handler("klippy:connect",
                                             self.handle_connect)
+        if getattr(self.mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
 
     def handle_connect(self):
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            # MCU not yet online; reconnect handler will re-run this.
+            return
         self._init_htu21d()
         self.reactor.update_timer(self.sample_timer, self.reactor.NOW)
 

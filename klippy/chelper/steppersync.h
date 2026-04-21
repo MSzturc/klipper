@@ -17,6 +17,7 @@ struct syncemitter *steppersync_alloc_syncemitter(
     struct steppersync *ss, char name[16], int alloc_stepcompress);
 void steppersync_setup_movequeue(struct steppersync *ss, struct serialqueue *sq
                                  , int move_num);
+void steppersync_detach_movequeue(struct steppersync *ss);
 void steppersync_set_time(struct steppersync *ss, double time_offset
                           , double mcu_freq);
 

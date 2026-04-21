@@ -18,7 +18,14 @@ class PCA9533:
         self.i2c = bus.MCU_I2C_from_config(config, default_addr=98)
         self.led_helper = led.LEDHelper(config, self.update_leds, 1)
         printer.register_event_handler("klippy:connect", self.handle_connect)
+        self.mcu = self.i2c.get_mcu()
+        if getattr(self.mcu, "is_non_critical", False):
+            printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
     def handle_connect(self):
+        if getattr(self.mcu, "non_critical_disconnected", False):
+            return
         self.i2c.i2c_write([PCA9533_PWM0, 85])
         self.i2c.i2c_write([PCA9533_PWM1, 170])
         self.update_leds(self.led_helper.get_status()['color_data'], None)

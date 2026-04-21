@@ -101,10 +101,17 @@ class PrinterMCUError:
         msg_update = []
         msg_updated = []
         for mcu_name, mcu in self.printer.lookup_objects('mcu'):
-            try:
-                mcu_version = mcu.get_status()['mcu_version']
-            except:
-                logging.exception("Unable to retrieve mcu_version from mcu")
+            status = mcu.get_status()
+            mcu_version = status.get('mcu_version')
+            if mcu_version is None:
+                if status.get('non_critical_disconnected'):
+                    logging.info(
+                        "Skipping offline non-critical MCU '%s' in"
+                        " protocol check", mcu_name.split()[-1])
+                else:
+                    logging.warning(
+                        "Unable to retrieve mcu_version from mcu '%s'",
+                        mcu_name.split()[-1])
                 continue
             if mcu_version != host_version:
                 msg_update.append("%s: Current version %s"

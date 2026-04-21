@@ -359,6 +359,10 @@ The following information is available in
   micro-controller architectures and with each code revision.
 - `last_stats.<statistics_name>`: Statistics information on the
   micro-controller connection.
+- `non_critical_disconnected`: True if this MCU has `is_non_critical:
+  True` and is currently offline (disconnect detected and reconnect has
+  not yet succeeded). False when the MCU is connected or is not marked
+  non-critical.
 
 ## motion_report
 

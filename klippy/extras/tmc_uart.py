@@ -225,8 +225,15 @@ class MCU_TMC_uart:
             config, max_addr)
         self.mutex = self.mcu_uart.mutex
         self.tmc_frequency = tmc_frequency
+        self.mcu = self.mcu_uart.get_mcu()
     def get_fields(self):
         return self.fields
+    def _check_connected(self):
+        if getattr(self.mcu, "non_critical_disconnected", False):
+            raise self.printer.command_error(
+                "TMC UART '%s' cannot communicate because MCU '%s' is"
+                " currently disconnected"
+                % (self.name, self.mcu.get_name()))
     def _do_get_register(self, reg_name):
         reg = self.name_to_reg[reg_name]
         if self.printer.get_start_args().get('debugoutput') is not None:
@@ -241,6 +248,7 @@ class MCU_TMC_uart:
         raise self.printer.command_error(
             "Unable to read tmc uart '%s' register %s" % (self.name, reg_name))
     def get_register_raw(self, reg_name):
+        self._check_connected()
         with self.mutex:
             return self._do_get_register(reg_name)
     def get_register(self, reg_name):
@@ -249,6 +257,7 @@ class MCU_TMC_uart:
         reg = self.name_to_reg[reg_name]
         if self.printer.get_start_args().get('debugoutput') is not None:
             return
+        self._check_connected()
         with self.mutex:
             for retry in range(5):
                 ifcnt = self.ifcnt

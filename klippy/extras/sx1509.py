@@ -39,7 +39,13 @@ class SX1509(object):
         self.reg_i_on_dict = {reg : 0 for reg in REG_I_ON}
         config.get_printer().register_event_handler("klippy:connect",
                                                     self.handle_connect)
+        if getattr(self._mcu, "is_non_critical", False):
+            self._printer.register_event_handler(
+                self._mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
     def handle_connect(self):
+        if getattr(self._mcu, "non_critical_disconnected", False):
+            return
         # Reset the chip, Default RegClock/RegMisc 0x0
         self._i2c.i2c_write([REG_RESET, 0x12])
         self._i2c.i2c_write([REG_RESET, 0x34])

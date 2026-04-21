@@ -45,7 +45,11 @@ class PrinterNeoPixel:
         self.update_color_data(self.led_helper.get_status()['color_data'])
         self.old_color_data = bytearray([d ^ 1 for d in self.color_data])
         # Register callbacks
-        printer.register_event_handler("klippy:connect", self.send_data)
+        printer.register_event_handler("klippy:connect", self._handle_connect)
+        if getattr(self.mcu, "is_non_critical", False):
+            printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self._handle_reconnect)
     def build_config(self):
         bmt = self.mcu.seconds_to_clock(BIT_MAX_TIME)
         rmt = self.mcu.seconds_to_clock(RESET_MIN_TIME)
@@ -63,6 +67,18 @@ class PrinterNeoPixel:
         color_data = self.color_data
         for cdidx, (lidx, cidx) in self.color_map:
             color_data[cdidx] = int(led_state[lidx][cidx] * 255. + .5)
+    def _handle_connect(self):
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            # MCU not yet online; reconnect handler will push the current
+            # colors once the firmware comes up.
+            return
+        self.send_data()
+    def _handle_reconnect(self):
+        # Force the next send_data to push the current colors: invalidate
+        # old_color_data so the diff check cannot early-return.
+        self.old_color_data = bytearray([d ^ 1 for d in self.color_data])
+        self.send_data()
     def send_data(self, print_time=None):
         old_data, new_data = self.old_color_data, self.color_data
         if new_data == old_data:

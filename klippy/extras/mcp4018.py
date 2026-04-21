@@ -14,6 +14,11 @@ class mcp4018:
                                            minval=0., maxval=self.scale)
         config.get_printer().register_event_handler("klippy:connect",
                                                     self.handle_connect)
+        self.mcu = self.i2c.get_mcu()
+        if getattr(self.mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
         # Register commands
         self.name = config.get_name().split()[1]
         gcode = self.printer.lookup_object('gcode')
@@ -21,6 +26,8 @@ class mcp4018:
                                    self.cmd_SET_DIGIPOT,
                                    desc=self.cmd_SET_DIGIPOT_help)
     def handle_connect(self):
+        if getattr(self.mcu, "non_critical_disconnected", False):
+            return
         self.set_dac(self.start_value)
     def set_dac(self, value):
         val = int(value * 127. / self.scale + .5)

@@ -89,6 +89,8 @@ class HX71xBase:
     # add_client interface, direct pass through to bulk_sensor API
     def add_client(self, callback):
         self.batch_bulk.add_client(callback)
+    def remove_client(self, callback):
+        self.batch_bulk.remove_client(callback)
 
     # Measurement decoding
     def _convert_samples(self, samples):

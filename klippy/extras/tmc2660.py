@@ -192,12 +192,20 @@ class TMC2660CurrentHelper:
 class MCU_TMC2660_SPI:
     def __init__(self, config, name_to_reg, fields):
         self.printer = config.get_printer()
+        self.name = config.get_name().split()[-1]
         self.mutex = self.printer.get_reactor().mutex()
         self.spi = bus.MCU_SPI_from_config(config, 0, default_speed=4000000)
         self.name_to_reg = name_to_reg
         self.fields = fields
+        self.mcu = self.spi.get_mcu()
     def get_fields(self):
         return self.fields
+    def _check_connected(self):
+        if getattr(self.mcu, "non_critical_disconnected", False):
+            raise self.printer.command_error(
+                "TMC2660 '%s' cannot communicate because MCU '%s' is"
+                " currently disconnected"
+                % (self.name, self.mcu.get_name()))
     def get_register_raw(self, reg_name):
         new_rdsel = ReadRegisters.index(reg_name)
         reg = self.name_to_reg["DRVCONF"]
@@ -206,6 +214,7 @@ class MCU_TMC2660_SPI:
                 'data': 0,
                 '#receive_time': .0,
             }
+        self._check_connected()
         with self.mutex:
             old_rdsel = self.fields.get_field("rdsel")
             val = self.fields.set_field("rdsel", new_rdsel)
@@ -222,6 +231,7 @@ class MCU_TMC2660_SPI:
     def get_register(self, reg_name):
         return self.get_register_raw(reg_name)['data']
     def set_register(self, reg_name, val, print_time=None):
+        self._check_connected()
         minclock = 0
         if print_time is not None:
             minclock = self.spi.get_mcu().print_time_to_clock(print_time)

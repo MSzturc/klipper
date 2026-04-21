@@ -179,6 +179,7 @@ class PrinterLCD:
         self.reactor = self.printer.get_reactor()
         # Load low-level lcd handler
         self.lcd_chip = config.getchoice('lcd_type', LCD_chips)(config)
+        self.mcu = self._resolve_lcd_mcu()
         # Load menu and display_status
         self.menu = None
         name = config.get_name()
@@ -200,6 +201,11 @@ class PrinterLCD:
             raise config.error("Unknown display_data group '%s'" % (dgroup,))
         # Screen updating
         self.printer.register_event_handler("klippy:ready", self.handle_ready)
+        if self.mcu is not None and getattr(
+                self.mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_ready)
         self.screen_update_timer = self.reactor.register_timer(
             self.screen_update_event)
         self.redraw_request_pending = False
@@ -212,9 +218,43 @@ class PrinterLCD:
         if name == 'display':
             gcode.register_mux_command('SET_DISPLAY_GROUP', 'DISPLAY', None,
                                        self.cmd_SET_DISPLAY_GROUP)
+    def _resolve_lcd_mcu(self):
+        # Walk the lcd_chip to find its primary MCU so non-critical
+        # reconnect hooks can fire when the underlying board comes back.
+        chip = self.lcd_chip
+        if hasattr(chip, 'mcu'):
+            return chip.mcu
+        if hasattr(chip, 'get_mcu'):
+            return chip.get_mcu()
+        # DisplayBase subclasses (st7920, uc1701, SSD1306, SH1106) may
+        # store the MCU inside their IO helpers instead.
+        for attr in ('io', 'spi', 'i2c', 'enable_helper'):
+            sub = getattr(chip, attr, None)
+            if sub is None:
+                continue
+            if hasattr(sub, 'get_mcu'):
+                return sub.get_mcu()
+            if hasattr(sub, 'mcu'):
+                return sub.mcu
+        # uc1701-family DisplayBase binds `self.send = io.send` without
+        # storing `io`. Reach back through the bound method to find the
+        # SPI4wire / I2C helper.
+        send = getattr(chip, 'send', None)
+        io = getattr(send, '__self__', None)
+        if io is not None:
+            for attr in ('spi', 'i2c'):
+                sub = getattr(io, attr, None)
+                if sub is not None and hasattr(sub, 'get_mcu'):
+                    return sub.get_mcu()
+        return None
     def get_dimensions(self):
         return self.lcd_chip.get_dimensions()
     def handle_ready(self):
+        if self.mcu is not None and getattr(
+                self.mcu, "non_critical_disconnected", False):
+            # The reconnect handler will invoke handle_ready again once
+            # the MCU comes back online.
+            return
         self.lcd_chip.init()
         # Start screen update timer
         self.reactor.update_timer(self.screen_update_timer, self.reactor.NOW)

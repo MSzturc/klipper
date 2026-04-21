@@ -56,6 +56,7 @@ class SHT3X:
         self.reactor = self.printer.get_reactor()
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=SHT3X_I2C_ADDR, default_speed=100000)
+        self.mcu = self.i2c.get_mcu()
         self._error = self.printer.command_error
         self.report_time = config.getint('sht3x_report_time', 1, minval=1)
         self.deviceId = config.get('sensor_type')
@@ -64,7 +65,15 @@ class SHT3X:
         self.printer.add_object("sht3x " + self.name, self)
         self.printer.register_event_handler("klippy:connect",
                                             self.handle_connect)
+        if getattr(self.mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
     def handle_connect(self):
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            # MCU not yet online; reconnect handler will re-run this.
+            return
         self._init_sht3x()
         self.reactor.update_timer(self.sample_timer, self.reactor.NOW)
 

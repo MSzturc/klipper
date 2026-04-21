@@ -92,6 +92,7 @@ class TMCErrorCheck:
         name_parts = config.get_name().split()
         self.stepper_name = ' '.join(name_parts[1:])
         self.mcu_tmc = mcu_tmc
+        self.mcu = mcu_tmc.get_mcu()
         self.fields = mcu_tmc.get_fields()
         self.check_timer = None
         self.last_drv_status = self.last_drv_fields = None
@@ -183,6 +184,14 @@ class TMCErrorCheck:
             if self.adc_temp_reg is not None:
                 self._query_temperature()
         except self.printer.command_error as e:
+            # A comms error on a non-critical MCU should pause driver-status
+            # polling rather than invoke_shutdown - the reconnect path will
+            # restart checks once the MCU is back.
+            if getattr(self.mcu, "is_non_critical", False):
+                logging.info("Pausing TMC periodic check on '%s': %s",
+                             self.stepper_name, str(e))
+                self.stop_checks()
+                return self.printer.get_reactor().NEVER
             self.printer.invoke_shutdown(str(e))
             return self.printer.get_reactor().NEVER
         return eventtime + 1.
@@ -322,6 +331,7 @@ class TMCCommandHelper:
         self.stepper_name = ' '.join(config.get_name().split()[1:])
         self.name = config.get_name().split()[-1]
         self.mcu_tmc = mcu_tmc
+        self.mcu = mcu_tmc.get_mcu()
         self.current_helper = current_helper
         self.fields = mcu_tmc.get_fields()
         self.stepper = None
@@ -346,6 +356,16 @@ class TMCCommandHelper:
                                             self._handle_mcu_identify)
         self.printer.register_event_handler("klippy:connect",
                                             self._handle_connect)
+        # Hook non-critical disconnect/reconnect so driver-status polling
+        # pauses on disconnect and TMC registers get re-initialised when
+        # the driver MCU returns.
+        if self._is_noncritical_mcu():
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_disconnect_event_name(),
+                self._handle_noncritical_disconnect)
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self._handle_noncritical_reconnect)
         # Register commands
         gcode = self.printer.lookup_object("gcode")
         gcode.register_mux_command("SET_TMC_FIELD", "STEPPER", self.name,
@@ -362,6 +382,28 @@ class TMCCommandHelper:
         for reg_name in list(self.fields.registers.keys()):
             val = self.fields.registers[reg_name] # Val may change during loop
             self.mcu_tmc.set_register(reg_name, val, print_time)
+    def _is_noncritical_mcu(self):
+        return bool(getattr(self.mcu, "is_non_critical", False))
+    def _handle_noncritical_disconnect(self):
+        self.echeck_helper.stop_checks()
+        self.mcu_phase_offset = None
+    def _handle_noncritical_reconnect(self):
+        if self.stepper is None:
+            return
+        enable_line = self.stepper_enable.lookup_enable(self.stepper_name)
+        if not enable_line.is_motor_enabled():
+            return
+        try:
+            with self.enable_mutex:
+                if self.toff is not None:
+                    self.fields.set_field("toff", self.toff)
+                self._init_registers()
+                did_reset = self.echeck_helper.start_checks()
+            if did_reset:
+                self.mcu_phase_offset = None
+        except self.printer.command_error as e:
+            logging.info("TMC %s reconnect recovery failed: %s",
+                         self.name, str(e))
     cmd_INIT_TMC_help = "Initialize TMC stepper driver registers"
     def cmd_INIT_TMC(self, gcmd):
         logging.info("INIT_TMC %s", self.name)
@@ -468,14 +510,30 @@ class TMCCommandHelper:
             self.mcu_tmc.set_register(reg_name, val, print_time)
         self.echeck_helper.stop_checks()
     def _handle_stepper_enable(self, print_time, is_enable):
+        if self._is_noncritical_mcu():
+            logging.info("TMC '%s' stepper event: %s at %.6f",
+                         self.stepper_name,
+                         "enable" if is_enable else "disable",
+                         print_time)
         def enable_disable_cb(eventtime):
             try:
                 with self.enable_mutex:
                     if is_enable:
                         self._do_enable(print_time)
+                        if self._is_noncritical_mcu():
+                            logging.info("TMC '%s' enable sequence complete",
+                                         self.stepper_name)
                     else:
                         self._do_disable(print_time)
             except self.printer.command_error as e:
+                # Ignore comms errors on non-critical MCUs - the reconnect
+                # path will re-init registers once the link is back.
+                if self._is_noncritical_mcu():
+                    logging.info("Ignoring TMC '%s' comms error on %s: %s",
+                                 self.stepper_name,
+                                 "enable" if is_enable else "disable",
+                                 str(e))
+                    return
                 self.printer.invoke_shutdown(str(e))
         self.printer.get_reactor().register_callback(enable_disable_cb)
     # Initial startup handling
@@ -498,9 +556,16 @@ class TMCCommandHelper:
             self.fields.set_field("toff", 0)
             logging.info("Enabling TMC virtual enable for '%s'",
                          self.stepper_name)
-        # Send init
+        # Send init - skip if the driver MCU is a non-critical one that is
+        # currently offline; the reconnect path will run _init_registers
+        # once the MCU is back.
         try:
-            self._init_registers()
+            if getattr(self.mcu, "non_critical_disconnected", False):
+                logging.info(
+                    "TMC %s skipping init - non-critical MCU '%s' is"
+                    " disconnected", self.name, self.mcu.get_name())
+            else:
+                self._init_registers()
         except self.printer.command_error as e:
             logging.info("TMC %s failed to init: %s", self.name, str(e))
     # get_status information export

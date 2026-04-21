@@ -58,6 +58,27 @@ serial:
 #   sending a Klipper command to the micro-controller so that it can
 #   reset itself. The default is 'arduino' if the micro-controller
 #   communicates over a serial port, 'command' otherwise.
+#is_non_critical: False
+#   If set to True this MCU is allowed to disconnect and reconnect at
+#   runtime without aborting the current print. Only additional MCUs
+#   (those configured under "[mcu name]") can be marked non-critical;
+#   the primary "[mcu]" and CAN bus MCUs are always treated as
+#   critical. While a non-critical MCU is offline, heater runaway
+#   checks, TMC driver-status polling, and periodic sensor polling on
+#   that MCU are paused; on reconnect, TMC registers are re-initialised
+#   and polling resumes. The default is False.
+#reconnect_interval: 2.0
+#   Seconds to wait between reconnect attempts while a non-critical
+#   MCU is offline. Only used when is_non_critical is True. The
+#   default is 2.0.
+#connect_macro:
+#   Name of a gcode macro to run shortly after a non-critical MCU
+#   reconnects. Only used when is_non_critical is True. The default
+#   is to run no macro.
+#disconnect_macro:
+#   Name of a gcode macro to run shortly after a non-critical MCU
+#   is detected offline. Only used when is_non_critical is True. The
+#   default is to run no macro.
 ```
 
 ### [mcu my_extra_mcu]

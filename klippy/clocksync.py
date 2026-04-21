@@ -9,10 +9,17 @@ RTT_AGE = .000010 / (60. * 60.)
 DECAY = 1. / 30.
 TRANSMIT_EXTRA = .001
 
+# Tunables for non-critical MCUs: poll faster and treat fewer unanswered
+# queries as still-active so a disconnect is detected sooner.
+NONCRIT_GET_CLOCK_PERIOD = 0.4476
+NONCRIT_PENDING_LIMIT = 2
+
 class ClockSync:
     def __init__(self, reactor):
         self.reactor = reactor
         self.serial = None
+        self.mcu = None
+        self.is_non_critical = False
         self.get_clock_timer = reactor.register_timer(self._get_clock_event)
         self.get_clock_cmd = self.cmd_queue = None
         self.queries_pending = 0
@@ -27,8 +34,31 @@ class ClockSync:
         self.clock_avg = self.clock_covariance = 0.
         self.prediction_variance = 0.
         self.last_prediction_time = 0.
+    def disconnect(self):
+        # Stop the periodic clock timer and drop the response handler. Called
+        # when a non-critical MCU goes offline; connect() will re-arm both.
+        self.reactor.update_timer(self.get_clock_timer, self.reactor.NEVER)
+        self.queries_pending = 0
+        if self.serial is not None:
+            try:
+                self.serial.register_response(None, 'clock')
+            except Exception:
+                pass
     def connect(self, serial):
         self.serial = serial
+        self.queries_pending = 0
+        # Reset estimator state - connect() may be invoked after a
+        # non-critical MCU hot-reconnect on the same ClockSync instance.
+        self.min_half_rtt = 999999999.9
+        self.min_rtt_time = 0.
+        self.time_avg = self.time_variance = 0.
+        self.clock_avg = self.clock_covariance = 0.
+        self.prediction_variance = 0.
+        self.last_prediction_time = 0.
+        self.last_clock = 0
+        # Learn whether this MCU is non-critical via the serial back-reference.
+        self.mcu = getattr(serial, "mcu", None)
+        self.is_non_critical = bool(getattr(self.mcu, "is_non_critical", False))
         self.mcu_freq = serial.msgparser.get_constant_float('CLOCK_FREQ')
         # Load initial clock and frequency
         params = serial.send_with_response('get_uptime', 'uptime')
@@ -61,6 +91,8 @@ class ClockSync:
         self.queries_pending += 1
         # Use an unusual time for the next event so clock messages
         # don't resonate with other periodic events.
+        if self.is_non_critical:
+            return eventtime + NONCRIT_GET_CLOCK_PERIOD
         return eventtime + .9839
     def _handle_clock(self, params):
         self.queries_pending = 0
@@ -140,6 +172,8 @@ class ClockSync:
         clock_diff -= (clock_diff & 0x80000000) << 1
         return last_clock + clock_diff
     def is_active(self):
+        if self.is_non_critical:
+            return self.queries_pending <= NONCRIT_PENDING_LIMIT
         return self.queries_pending <= 4
     def dump_debug(self):
         sample_time, clock, freq = self.clock_est

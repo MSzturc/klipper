@@ -23,6 +23,19 @@ class MCU_buttons:
         self.invert = self.last_button = 0
         self.ack_cmd = None
         self.ack_count = 0
+        # Reset host-side ack counters when the MCU side resets (on a
+        # non-critical disconnect or reconnect) so button state tracking
+        # stays aligned.
+        if getattr(self.mcu, "is_non_critical", False):
+            printer.register_event_handler(
+                self.mcu.get_non_critical_disconnect_event_name(),
+                self._reset_state)
+            printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self._reset_state)
+    def _reset_state(self):
+        self.ack_count = 0
+        self.last_button = 0
     def setup_buttons(self, pins, callback):
         mask = 0
         shift = len(self.pin_list)
@@ -35,6 +48,7 @@ class MCU_buttons:
     def build_config(self):
         if not self.pin_list:
             return
+        self._reset_state()
         self.oid = self.mcu.create_oid()
         self.mcu.add_config_cmd("config_buttons oid=%d button_count=%d" % (
             self.oid, len(self.pin_list)))

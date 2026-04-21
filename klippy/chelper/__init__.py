@@ -69,6 +69,7 @@ defs_steppersync = """
         , char name[16], int alloc_stepcompress);
     void steppersync_setup_movequeue(struct steppersync *ss
         , struct serialqueue *sq, int move_num);
+    void steppersync_detach_movequeue(struct steppersync *ss);
     void steppersync_set_time(struct steppersync *ss
         , double time_offset, double mcu_freq);
 
@@ -248,6 +249,7 @@ defs_trdispatch = """
     void trdispatch_mcu_setup(struct trdispatch_mcu *tdm
         , uint64_t last_status_clock, uint64_t expire_clock
         , uint64_t expire_ticks, uint64_t min_extend_ticks);
+    void trdispatch_mcu_clear(struct trdispatch_mcu *tdm);
 """
 
 defs_pyhelper = """

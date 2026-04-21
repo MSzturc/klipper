@@ -7,7 +7,7 @@
 from . import hx71x
 from . import ads1220
 from .bulk_sensor import BatchWebhooksClient
-import collections, itertools
+import collections, itertools, logging
 # We want either Python 3's zip() or Python 2's izip() but NOT 2's zip():
 zip_impl = zip
 try:
@@ -40,6 +40,14 @@ class ApiClientHelper(object):
     # Add a client that gets data callbacks
     def add_client(self, client_cb):
         self.client_cbs.append(client_cb)
+
+    # Remove a previously-added client; silently ignores unknown callbacks
+    # so callers can use this idempotently from teardown paths.
+    def remove_client(self, client_cb):
+        try:
+            self.client_cbs.remove(client_cb)
+        except ValueError:
+            pass
 
     # Add Webhooks client and send header
     def _add_webhooks_client(self, web_request):
@@ -369,6 +377,11 @@ class LoadCell:
         self.config_name = config.get_name()
         self.name = config.get_name().split()[-1]
         self.sensor = sensor   # must implement BulkSensorAdc
+        try:
+            self._sensor_mcu = sensor.get_mcu()
+        except Exception:
+            self._sensor_mcu = None
+        self._sensor_stream_started = False
         buffer_size = sensor.get_samples_per_second() // 2
         self._force_buffer = collections.deque(maxlen=buffer_size)
         self.reference_tare_counts = config.getint('reference_tare_counts',
@@ -386,10 +399,44 @@ class LoadCell:
                                       "load_cell", self.name, header)
         # startup, when klippy is ready, start capturing data
         printer.register_event_handler("klippy:ready", self._handle_ready)
+        # Track non-critical MCU state so the sensor stream can be deferred
+        # until the MCU is available and restarted after a reconnect.
+        if (self._sensor_mcu is not None
+                and getattr(self._sensor_mcu, "is_non_critical", False)):
+            printer.register_event_handler(
+                self._sensor_mcu.get_non_critical_reconnect_event_name(),
+                self._handle_sensor_reconnect)
+            printer.register_event_handler(
+                self._sensor_mcu.get_non_critical_disconnect_event_name(),
+                self._handle_sensor_disconnect)
 
-    def _handle_do_ready(self, eventtime):
+    def _start_sensor_stream(self):
+        if self._sensor_stream_started:
+            return
+        if (self._sensor_mcu is not None
+                and getattr(self._sensor_mcu, "is_non_critical", False)
+                and getattr(self._sensor_mcu, "non_critical_disconnected",
+                            False)):
+            logging.info(
+                "Load cell '%s' deferred start: MCU '%s' is disconnected",
+                self.name, self._sensor_mcu.get_name())
+            return
         self.sensor.add_client(self._sensor_data_event)
         self.add_client(self._track_force)
+        self._sensor_stream_started = True
+
+    def _handle_do_ready(self, eventtime):
+        try:
+            self._start_sensor_stream()
+        except Exception as e:
+            if (self._sensor_mcu is not None
+                    and getattr(self._sensor_mcu, "is_non_critical", False)):
+                logging.info(
+                    "Load cell '%s' deferred start after reconnect race: %s",
+                    self.name, str(e))
+                self._sensor_stream_started = False
+                return
+            raise
         # announce calibration status on ready
         if self.is_calibrated():
             self.printer.send_event("load_cell:calibrate", self)
@@ -397,6 +444,22 @@ class LoadCell:
             self.printer.send_event("load_cell:tare", self)
     def _handle_ready(self):
         self.printer.get_reactor().register_callback(self._handle_do_ready)
+    def _handle_sensor_reconnect(self):
+        self.printer.get_reactor().register_callback(self._handle_do_ready)
+    def _handle_sensor_disconnect(self):
+        if self._sensor_stream_started:
+            # Unregister the clients we added in _start_sensor_stream so
+            # the next reconnect doesn't fan out sample events to stale
+            # callback copies. The helpers tolerate unknown callbacks,
+            # so this is safe even if the sensor already cleared them.
+            try:
+                self.sensor.remove_client(self._sensor_data_event)
+            except AttributeError:
+                # Sensor type predates remove_client; accept the leak
+                # rather than break an unrelated sensor class.
+                pass
+            self.clients.remove_client(self._track_force)
+        self._sensor_stream_started = False
 
     # convert raw counts to grams and broadcast to clients
     def _sensor_data_event(self, msg):

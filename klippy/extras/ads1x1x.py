@@ -199,6 +199,10 @@ class ADS1X1X_chip:
         self._printer.add_object("ads1x1x " + self.name, self)
         self._printer.register_event_handler("klippy:connect", \
                                             self._handle_connect)
+        if getattr(self.mcu, "is_non_critical", False):
+            self._printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self._handle_connect)
 
         self._pins = {}
         self._mutex = self._reactor.mutex()
@@ -243,6 +247,10 @@ class ADS1X1X_chip:
             pin, pin_type))
 
     def _handle_connect(self):
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            # MCU not yet online; reconnect handler will re-run this.
+            return
         try:
             # Init all devices on bus for this kind of device
             self._i2c.i2c_write([0x06, 0x00, 0x00])
@@ -324,17 +332,43 @@ class ADS1X1X_pin:
         self.pcfg = pcfg
         self._last_state = (0., 0.)
         self.invalid_count = 0
+        self._reactor = None
+        self._sample_timer = None
 
         self.chip._printer.register_event_handler("klippy:connect", \
                                                   self._handle_connect)
+        # Mirror the chip-level non-critical reconnect registration so the
+        # sample timer is armed after a reconnect (the initial klippy:connect
+        # event early-returns while the MCU is still offline).
+        if getattr(self.mcu, "is_non_critical", False):
+            self.chip._printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self._handle_connect)
 
     def _handle_connect(self):
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            # MCU not yet online; the reconnect handler will re-run this.
+            return
+        if self._sample_timer is not None and self._reactor is not None:
+            # Reconnect path: timer already exists, just poke it so the
+            # next poll happens promptly instead of at the next report_time.
+            self._reactor.update_timer(self._sample_timer, self._reactor.NOW)
+            return
         self._reactor = self.chip._printer.get_reactor()
         self._sample_timer = \
             self._reactor.register_timer(self._process_sample, \
                                          self._reactor.NOW)
 
     def _process_sample(self, eventtime):
+        # Belt-and-suspenders: even if the chip's disconnect handler hasn't
+        # been scheduled yet, don't count an offline MCU as a sampling
+        # failure or publish a zero sample - just reschedule. Otherwise
+        # invalid_count would trip invoke_shutdown on a disconnected
+        # non-critical MCU.
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            return eventtime + self.report_time
         sample = self.chip.sample(self)
         if sample is not None:
             # The sample is encoded in the top 12 or full 16 bits
@@ -360,7 +394,9 @@ class ADS1X1X_pin:
             else:
                 self.invalid_count = 0
 
-            # Publish result
+            # Publish result (reactor is set alongside the timer in
+            # _handle_connect before _process_sample can first run).
+            assert self._reactor is not None
             systime = self._reactor.monotonic()
             measured_time = self.chip.mcu.estimated_print_time(systime)
             self._last_state = (measured_time, target_value)

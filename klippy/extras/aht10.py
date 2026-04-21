@@ -37,6 +37,7 @@ class AHTBase:
         self.reactor = self.printer.get_reactor()
         self.i2c = bus.MCU_I2C_from_config(
             config, default_addr=I2C_ADDR, default_speed=100000)
+        self.mcu = self.i2c.get_mcu()
         self.report_time = config.getint('aht10_report_time', 30, minval=5)
         self.temp = self.min_temp = self.max_temp = self.humidity = 0.
         self.sample_timer = self.reactor.register_timer(self._sample_aht)
@@ -44,11 +45,21 @@ class AHTBase:
         self.printer.add_object("aht10 " + self.name, self)
         self.printer.register_event_handler("klippy:connect",
                                                 self.handle_connect)
+        # Re-run handle_connect after a non-critical MCU reconnect so the
+        # sensor re-initialises and polling resumes.
+        if getattr(self.mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
         self.is_calibrated = False
         self.init_sent = False
         self._callback = None
 
     def handle_connect(self):
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            # MCU not yet online; reconnect handler will re-run this.
+            return
         self._init_sensor()
         self.reactor.update_timer(self.sample_timer, self.reactor.NOW)
 

@@ -36,8 +36,16 @@ class LM75:
         self.printer.add_object("lm75 " + self.name, self)
         self.printer.register_event_handler("klippy:connect",
                                             self.handle_connect)
+        if getattr(self.mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self.handle_connect)
 
     def handle_connect(self):
+        if (getattr(self.mcu, "is_non_critical", False)
+                and getattr(self.mcu, "non_critical_disconnected", False)):
+            # MCU not yet online; reconnect handler will re-run this.
+            return
         self._init_lm75()
         self.reactor.update_timer(self.sample_timer, self.reactor.NOW)
 

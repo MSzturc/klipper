@@ -19,6 +19,7 @@ class HeaterCheck:
                                             self.handle_shutdown)
         self.heater_name = config.get_name().split()[1]
         self.heater = None
+        self.mcu = None
         self.hysteresis = config.getfloat('hysteresis', 5., minval=0.)
         self.max_error = config.getfloat('max_error', 120., minval=0.)
         self.heating_gain = config.getfloat('heating_gain', 2., above=0.)
@@ -37,9 +38,46 @@ class HeaterCheck:
             return
         pheaters = self.printer.lookup_object('heaters')
         self.heater = pheaters.lookup_heater(self.heater_name)
+        try:
+            self.mcu = self.heater.mcu_pwm.get_mcu()
+        except Exception:
+            self.mcu = None
         logging.info("Starting heater checks for %s", self.heater_name)
         reactor = self.printer.get_reactor()
         self.check_timer = reactor.register_timer(self.check_event, reactor.NOW)
+        # If the heater lives on a non-critical MCU, pause/resume runaway
+        # checks around disconnect/reconnect instead of tripping shutdown.
+        if self.mcu is not None and getattr(self.mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_disconnect_event_name(),
+                self._suspend_checks)
+            self.printer.register_event_handler(
+                self.mcu.get_non_critical_reconnect_event_name(),
+                self._resume_checks)
+            # The MCU may already be in the startup-deferred state, which
+            # sets non_critical_disconnected=True without emitting the
+            # disconnect event. Suspend checks directly so the first
+            # check_event does not run against an offline MCU.
+            if getattr(self.mcu, "non_critical_disconnected", False):
+                self._suspend_checks()
+    def _suspend_checks(self):
+        if self.check_timer is not None:
+            r = self.printer.get_reactor()
+            r.update_timer(self.check_timer, r.NEVER)
+        self.approaching_target = self.starting_approach = False
+        self.error = 0.
+        self.goal_systime = self.printer.get_reactor().NEVER
+        logging.info("verify_heater[%s]: suspended (MCU offline)",
+                     self.heater_name)
+    def _resume_checks(self):
+        self.approaching_target = self.starting_approach = False
+        self.error = 0.
+        self.goal_systime = self.printer.get_reactor().NEVER
+        if self.check_timer is not None:
+            r = self.printer.get_reactor()
+            r.update_timer(self.check_timer, r.NOW)
+        logging.info("verify_heater[%s]: resumed (MCU reconnected)",
+                     self.heater_name)
     def handle_shutdown(self):
         if self.check_timer is not None:
             reactor = self.printer.get_reactor()

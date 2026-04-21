@@ -41,6 +41,13 @@ class PrinterTemperatureMCU:
             return
         self.printer.register_event_handler("klippy:mcu_identify",
                                             self.handle_mcu_identify)
+        # Non-critical MCUs defer their _mcu_identify; re-run this handler
+        # after the reconnect timer actually brings the MCU up.
+        mcu = self.mcu_adc.get_mcu()
+        if getattr(mcu, "is_non_critical", False):
+            self.printer.register_event_handler(
+                mcu.get_non_critical_reconnect_event_name(),
+                self.handle_mcu_identify)
     # Temperature interface
     def setup_callback(self, temperature_callback):
         self.temperature_callback = temperature_callback
@@ -63,6 +70,11 @@ class PrinterTemperatureMCU:
     def handle_mcu_identify(self):
         # Obtain mcu information
         mcu = self.mcu_adc.get_mcu()
+        # The MCU may be a deferred non-critical one; wait for the reconnect
+        # event handler below to re-run this once it actually comes online.
+        if (getattr(mcu, "is_non_critical", False)
+                and getattr(mcu, "non_critical_disconnected", False)):
+            return
         self.debug_read_cmd = mcu.lookup_query_command(
             "debug_read order=%c addr=%u", "debug_result val=%u")
         self.mcu_type = mcu.get_constants().get("MCU", "")
