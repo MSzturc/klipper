@@ -25,12 +25,13 @@ SOURCE_FILES = [
     'kin_cartesian.c', 'kin_corexy.c', 'kin_corexz.c', 'kin_delta.c',
     'kin_deltesian.c', 'kin_polar.c', 'kin_rotary_delta.c', 'kin_winch.c',
     'kin_extruder.c', 'kin_shaper.c', 'kin_idex.c', 'kin_generic.c',
+    'integrate.c',
 ]
 DEST_LIB = "c_helper.so"
 OTHER_FILES = [
     'list.h', 'serialqueue.h', 'stepcompress.h', 'steppersync.h',
     'itersolve.h', 'pyhelper.h',
-    'trapq.h', 'pollreactor.h', 'msgblock.h',
+    'trapq.h', 'pollreactor.h', 'msgblock.h', 'kin_shaper.h', 'integrate.h',
 ]
 
 defs_stepcompress = """
@@ -163,14 +164,34 @@ defs_kin_winch = """
 """
 
 defs_kin_extruder = """
+    struct pressure_advance_params;
     struct stepper_kinematics *extruder_stepper_alloc(void);
+    void extruder_stepper_free(struct stepper_kinematics *sk);
     void extruder_set_pressure_advance(struct stepper_kinematics *sk
-        , double pressure_advance, double smooth_time, double time_offset);
+        , double print_time, int n_params, double params[]
+        , double (*func)(double, double, struct pressure_advance_params *)
+        , double time_offset);
+    double pressure_advance_linear_model_func(double position
+        , double pa_velocity, struct pressure_advance_params *pa_params);
+    double pressure_advance_tanh_model_func(double position
+        , double pa_velocity, struct pressure_advance_params *pa_params);
+    double pressure_advance_recipr_model_func(double position
+        , double pa_velocity, struct pressure_advance_params *pa_params);
+    double pressure_advance_log_model_func(double position
+        , double pa_velocity, struct pressure_advance_params *pa_params);
+    int extruder_set_smoothing_params(struct stepper_kinematics *sk, char axis
+        , int n, double a[], double t_sm, double t_offs);
+    void extruder_set_smooth_moves_params(struct stepper_kinematics *sk
+        , int smooth_extruding_moves, int smooth_extrude_only_moves);
+    double extruder_get_step_gen_window(struct stepper_kinematics *sk);
 """
 
 defs_kin_shaper = """
+    double input_shaper_get_step_gen_window(struct stepper_kinematics *sk);
     int input_shaper_set_shaper_params(struct stepper_kinematics *sk, char axis
         , int n, double a[], double t[]);
+    int input_shaper_set_smoother_params(struct stepper_kinematics *sk
+        , char axis, int n, double a[], double t_sm);
     int input_shaper_set_sk(struct stepper_kinematics *sk
         , struct stepper_kinematics *orig_sk);
     void input_shaper_update_sk(struct stepper_kinematics *sk);
