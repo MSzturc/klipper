@@ -272,30 +272,29 @@ FieldFormatters.update({
 # TMC stepper current config helper
 ######################################################################
 
-class TMC2240CurrentHelper:
+class TMC2240CurrentHelper(tmc.BaseTMCCurrentHelper):
     def __init__(self, config, mcu_tmc):
-        self.printer = config.get_printer()
-        self.name = config.get_name().split()[-1]
-        self.mcu_tmc = mcu_tmc
-        self.fields = mcu_tmc.get_fields()
+        # Rref determines the per-range full-scale current on the TMC2240;
+        # evaluate it before the base class parses run/hold/home because
+        # the max_current used for config bounds-checking depends on it.
         self.Rref = config.getfloat('rref', 12000.,
                                     minval=12000., maxval=60000.)
-        max_cur = self._get_ifs_rms(3)
-        run_current = config.getfloat('run_current', above=0., maxval=max_cur)
-        hold_current = config.getfloat('hold_current', max_cur,
-                                       above=0., maxval=max_cur)
-        self.req_hold_current = hold_current
-        current_range = self._calc_current_range(run_current)
+        max_cur = self._get_ifs_rms_for(3)
+        super().__init__(config, mcu_tmc, max_cur)
+        current_range = self._calc_current_range(self.req_run_current)
         self.fields.set_field("current_range", current_range)
-        gscaler, irun, ihold = self._calc_current(run_current, hold_current)
+        gscaler, irun, ihold = self._calc_current(
+            self.req_run_current, self.req_hold_current)
         self.fields.set_field("globalscaler", gscaler)
         self.fields.set_field("ihold", ihold)
         self.fields.set_field("irun", irun)
+    def _get_ifs_rms_for(self, current_range):
+        KIFS = [11750., 24000., 36000., 36000.]
+        return (KIFS[current_range] / self.Rref) / math.sqrt(2.)
     def _get_ifs_rms(self, current_range=None):
         if current_range is None:
             current_range = self.fields.get_field("current_range")
-        KIFS = [11750., 24000., 36000., 36000.]
-        return (KIFS[current_range] / self.Rref) / math.sqrt(2.)
+        return self._get_ifs_rms_for(current_range)
     def _calc_current_range(self, current):
         for current_range in range(4):
             if current <= self._get_ifs_rms(current_range):
@@ -330,10 +329,11 @@ class TMC2240CurrentHelper:
         ifs_rms = self._get_ifs_rms()
         run_current = self._calc_current_from_field("irun")
         hold_current = self._calc_current_from_field("ihold")
-        return (run_current, hold_current, self.req_hold_current, ifs_rms)
-    def set_current(self, run_current, hold_current, print_time):
-        self.req_hold_current = hold_current
-        gscaler, irun, ihold = self._calc_current(run_current, hold_current)
+        return (run_current, hold_current, self.req_hold_current, ifs_rms,
+                self.req_home_current)
+    def apply_current(self, print_time):
+        gscaler, irun, ihold = self._calc_current(
+            self.actual_current, self.req_hold_current)
         val = self.fields.set_field("globalscaler", gscaler)
         self.mcu_tmc.set_register("GLOBALSCALER", val, print_time)
         self.fields.set_field("ihold", ihold)
@@ -360,8 +360,9 @@ class TMC2240:
         # Allow virtual pins to be created
         tmc.TMCVirtualPinHelper(config, self.mcu_tmc)
         # Register commands
-        current_helper = TMC2240CurrentHelper(config, self.mcu_tmc)
-        cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc, current_helper)
+        self.current_helper = TMC2240CurrentHelper(config, self.mcu_tmc)
+        cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc,
+                                         self.current_helper)
         cmdhelper.setup_register_dump(ReadRegisters)
         self.get_phase_offset = cmdhelper.get_phase_offset
         self.get_status = cmdhelper.get_status

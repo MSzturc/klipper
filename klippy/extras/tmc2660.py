@@ -112,16 +112,11 @@ FieldFormatters.update({
 
 MAX_CURRENT = 2.400
 
-class TMC2660CurrentHelper:
+class TMC2660CurrentHelper(tmc.BaseTMCCurrentHelper):
     def __init__(self, config, mcu_tmc):
-        self.printer = config.get_printer()
-        self.name = config.get_name().split()[-1]
-        self.mcu_tmc = mcu_tmc
-        self.fields = mcu_tmc.get_fields()
-        self.current = config.getfloat('run_current', minval=0.1,
-                                       maxval=MAX_CURRENT)
+        super().__init__(config, mcu_tmc, MAX_CURRENT)
         self.sense_resistor = config.getfloat('sense_resistor')
-        vsense, cs = self._calc_current(self.current)
+        vsense, cs = self._calc_current(self.req_run_current)
         self.fields.set_field("cs", cs)
         self.fields.set_field("vsense", vsense)
 
@@ -160,10 +155,11 @@ class TMC2660CurrentHelper:
     def _handle_printing(self, print_time):
         print_time -= 0.100 # Schedule slightly before deadline
         self.printer.get_reactor().register_callback(
-            (lambda ev: self._update_current(self.current, print_time)))
+            (lambda ev: self._update_current(self.actual_current, print_time)))
 
     def _handle_ready(self, print_time):
-        current = self.current * float(self.idle_current_percentage) / 100.
+        current = (self.actual_current
+                   * float(self.idle_current_percentage) / 100.)
         self.printer.get_reactor().register_callback(
             (lambda ev: self._update_current(current, print_time)))
 
@@ -177,11 +173,21 @@ class TMC2660CurrentHelper:
             self.mcu_tmc.set_register("DRVCONF", val, print_time)
 
     def get_current(self):
-        return self.current, None, None, MAX_CURRENT
+        # Position 0 is the currently programmed run-current slot — must
+        # be actual_current (not req_run_current), otherwise
+        # SET_TMC_CURRENT mid-homing would compute new_run_current ==
+        # req_run_current != actual_current and write run_current back
+        # into the driver, undoing the home_current swap. Other TMC
+        # drivers read this back from the irun register; TMC2660 has no
+        # such readback, so the in-memory mirror is the source of truth.
+        # TMC2660 has no separate hold_current — report None for that
+        # position; extend with req_home_current at position 4 to match
+        # the BaseTMCCurrentHelper contract.
+        return (self.actual_current, None, None, MAX_CURRENT,
+                self.req_home_current)
 
-    def set_current(self, run_current, hold_current, print_time):
-        self.current = run_current
-        self._update_current(run_current, print_time)
+    def apply_current(self, print_time):
+        self._update_current(self.actual_current, print_time)
 
 
 ######################################################################
@@ -256,8 +262,9 @@ class TMC2660:
         self.fields.set_field("sdoff", 0) # Access DRVCTRL in step/dir mode
         self.mcu_tmc = MCU_TMC2660_SPI(config, Registers, self.fields)
         # Register commands
-        current_helper = TMC2660CurrentHelper(config, self.mcu_tmc)
-        cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc, current_helper)
+        self.current_helper = TMC2660CurrentHelper(config, self.mcu_tmc)
+        cmdhelper = tmc.TMCCommandHelper(config, self.mcu_tmc,
+                                         self.current_helper)
         cmdhelper.setup_register_dump(ReadRegisters)
         self.get_phase_offset = cmdhelper.get_phase_offset
         self.get_status = cmdhelper.get_status

@@ -431,25 +431,44 @@ class TMCCommandHelper:
     cmd_SET_TMC_CURRENT_help = "Set the current of a TMC driver"
     def cmd_SET_TMC_CURRENT(self, gcmd):
         ch = self.current_helper
-        prev_cur, prev_hold_cur, req_hold_cur, max_cur = ch.get_current()
+        cur = ch.get_current()
+        prev_cur, prev_hold_cur, req_hold_cur, max_cur = cur[:4]
+        prev_home_cur = cur[4] if len(cur) > 4 else None
         run_current = gcmd.get_float('CURRENT', None, minval=0., maxval=max_cur)
         hold_current = gcmd.get_float('HOLDCURRENT', None,
                                       above=0., maxval=max_cur)
-        if run_current is not None or hold_current is not None:
-            if run_current is None:
-                run_current = prev_cur
-            if hold_current is None:
-                hold_current = req_hold_cur
+        home_current = gcmd.get_float('HOMECURRENT', None,
+                                      above=0., maxval=max_cur)
+        if (run_current is not None or hold_current is not None
+                or home_current is not None):
+            # Defer req_run_current / req_home_current mutation until
+            # after a successful driver write. set_current() rolls back
+            # actual_current and req_hold_current on apply_current()
+            # failure, but cannot undo set_run_current/set_home_current
+            # — touching those before the write means a transient
+            # UART/SPI error would silently shift the target the next
+            # post-home current restore writes back.
+            new_run_current = (run_current if run_current is not None
+                               else prev_cur)
+            new_hold_current = (hold_current if hold_current is not None
+                                else req_hold_cur)
             toolhead = self.printer.lookup_object('toolhead')
             print_time = toolhead.get_last_move_time()
-            ch.set_current(run_current, hold_current, print_time)
-            prev_cur, prev_hold_cur, req_hold_cur, max_cur = ch.get_current()
+            ch.set_current(new_run_current, new_hold_current, print_time)
+            if run_current is not None:
+                ch.set_run_current(run_current)
+            if home_current is not None:
+                ch.set_home_current(home_current)
+            cur = ch.get_current()
+            prev_cur, prev_hold_cur, req_hold_cur, max_cur = cur[:4]
+            prev_home_cur = cur[4] if len(cur) > 4 else None
         # Report values
-        if prev_hold_cur is None:
-            gcmd.respond_info("Run Current: %0.2fA" % (prev_cur,))
-        else:
-            gcmd.respond_info("Run Current: %0.2fA Hold Current: %0.2fA"
-                              % (prev_cur, prev_hold_cur))
+        parts = ["Run Current: %0.2fA" % (prev_cur,)]
+        if prev_hold_cur is not None:
+            parts.append("Hold Current: %0.2fA" % (prev_hold_cur,))
+        if prev_home_cur is not None:
+            parts.append("Home Current: %0.2fA" % (prev_home_cur,))
+        gcmd.respond_info(" ".join(parts))
     # Stepper phase tracking
     def _get_phases(self):
         return (256 >> self.fields.get_field("mres")) * 4
@@ -802,3 +821,109 @@ def TMCVhighHelper(config, mcu_tmc):
     if velocity is not None:
         thigh = TMCtstepHelper(mcu_tmc, velocity, config=config)
     fields.set_field("thigh", thigh)
+
+
+######################################################################
+# Base class for TMC current helpers (sensorless homing support)
+######################################################################
+
+# Shared state machine used by every TMC driver CurrentHelper so the same
+# "run / hold / home" current model is visible to the homing state machine.
+# Three current concepts are tracked independently:
+#   * config_*  - the value parsed from the config file
+#   * req_*     - the current the user/gcode last requested (SET_TMC_CURRENT
+#                 moves this, the config default initialises it)
+#   * actual_*  - the current the driver is actually programmed to right now;
+#                 this swings between req_run_current and req_home_current
+#                 around a homing cycle, and is restored to req_run_current
+#                 at the end of the homing sequence.
+# Subclasses implement apply_current(print_time) - the driver-specific
+# path that programs actual_current into the hardware.
+class BaseTMCCurrentHelper:
+    def __init__(self, config, mcu_tmc, max_current):
+        self.printer = config.get_printer()
+        self.name = config.get_name().split()[-1]
+        self.mcu_tmc = mcu_tmc
+        self.fields = mcu_tmc.get_fields()
+        self.max_current = max_current
+        # Configured defaults
+        self.config_run_current = config.getfloat(
+            'run_current', above=0., maxval=max_current)
+        self.config_hold_current = config.getfloat(
+            'hold_current', max_current, above=0., maxval=max_current)
+        self.config_home_current = config.getfloat(
+            'home_current', self.config_run_current,
+            above=0., maxval=max_current)
+        self.current_change_dwell_time = config.getfloat(
+            'current_change_dwell_time', 0.5, above=0.)
+        # Requested values start at config defaults
+        self.req_run_current = self.config_run_current
+        self.req_hold_current = self.config_hold_current
+        self.req_home_current = self.config_home_current
+        # Actual value currently programmed on the driver
+        self.actual_current = self.req_run_current
+    # Introspection --------------------------------------------------------
+    def needs_home_current_change(self):
+        return self.actual_current != self.req_home_current
+    def needs_run_current_change(self):
+        return self.actual_current != self.req_run_current
+    def needs_hold_current_change(self, hold_current):
+        return hold_current != self.req_hold_current
+    # Requested-value mutators --------------------------------------------
+    def set_home_current(self, new_home_current):
+        self.req_home_current = min(self.max_current, new_home_current)
+    def set_run_current(self, new_run_current):
+        self.req_run_current = min(self.max_current, new_run_current)
+    def set_hold_current(self, new_hold_current):
+        self.req_hold_current = new_hold_current
+    # Actual-value tracker -------------------------------------------------
+    def set_actual_current(self, current):
+        self.actual_current = current
+    # Current programming -------------------------------------------------
+    # set_current() is the unified entry point used both by homing
+    # transitions and by the SET_TMC_CURRENT gcode command.  The
+    # in-memory state (actual_current, req_hold_current) has to be
+    # updated before apply_current() because subclass apply_current()
+    # implementations read those fields back out to compute the
+    # register values they program.  If apply_current() then raises
+    # (driver-write error mid-batch), roll the in-memory state back so
+    # a follow-up swap — including the post-home rollback to
+    # run_current — actually re-issues instead of being short-circuited
+    # by needs_*_current_change() reporting "already there".
+    def set_current(self, run_current, hold_current, print_time):
+        needs_run = run_current != self.actual_current
+        needs_hold = self.needs_hold_current_change(hold_current)
+        if not needs_run and not needs_hold:
+            return
+        prev_actual = self.actual_current
+        prev_hold = self.req_hold_current
+        if needs_hold:
+            self.set_hold_current(hold_current)
+        self.set_actual_current(run_current)
+        try:
+            self.apply_current(print_time)
+        except Exception:
+            self.set_actual_current(prev_actual)
+            if needs_hold:
+                self.set_hold_current(prev_hold)
+            raise
+    # Homing-transition helpers -------------------------------------------
+    # set_current_for_homing(pre_homing=True) swaps to req_home_current;
+    # set_current_for_homing(pre_homing=False) swaps back to req_run_current.
+    # Returns the dwell time the driver requires after the swap (caller
+    # collects the max dwell across all rails in a batch so the toolhead
+    # only dwells once).
+    def set_current_for_homing(self, print_time, pre_homing):
+        if pre_homing and self.needs_home_current_change():
+            self.set_current(self.req_home_current, self.req_hold_current,
+                             print_time)
+            return self.current_change_dwell_time
+        if (not pre_homing) and self.needs_run_current_change():
+            self.set_current(self.req_run_current, self.req_hold_current,
+                             print_time)
+            return self.current_change_dwell_time
+        return 0.
+    # Subclass hook --------------------------------------------------------
+    def apply_current(self, print_time):
+        raise NotImplementedError(
+            "BaseTMCCurrentHelper subclass must implement apply_current()")

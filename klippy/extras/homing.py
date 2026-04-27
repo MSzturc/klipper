@@ -50,6 +50,12 @@ class HomingMove:
             toolhead = printer.lookup_object('toolhead')
         self.toolhead = toolhead
         self.stepper_positions = []
+        # Populated at the end of homing_move() with the cartesian
+        # distance each kinematic axis actually travelled during the
+        # homing move. The sensorless-homing rehome check compares this
+        # against min_home_dist to decide whether a second pass is
+        # warranted.
+        self.distance_elapsed = []
     def get_mcu_endstops(self):
         return [es for es, name in self.endstops]
     def _calc_endstop_rate(self, mcu_endstop, movepos, speed):
@@ -137,6 +143,34 @@ class HomingMove:
             haltpos = trigpos = movepos
             over_steps = {sp.stepper_name: sp.halt_pos - sp.trig_pos
                           for sp in self.stepper_positions}
+            # Record how far each kinematic axis travelled from move
+            # start to StallGuard trigger (used by the SL-homing rehome
+            # check). Compute it by subtracting two absolute
+            # calc_position() evaluations rather than feeding step
+            # deltas through calc_position directly: kinematics like
+            # delta (trilateration on absolute actuator positions) and
+            # generic_cartesian (carriage offsets are subtracted from
+            # absolute positions) are not linear in step deltas, but
+            # their difference between two absolute solutions cancels
+            # out the offsets and non-linearities for any affine
+            # kinematic.  Use trig_pos (when StallGuard fired), not
+            # halt_pos (where the decel ramp came to rest), so
+            # deceleration overshoot can't mask an early trigger.
+            trig_kin_spos = {
+                sp.stepper_name: (
+                    sp.start_cmd_pos
+                    + (sp.trig_pos - sp.start_pos)
+                    * sp.stepper.get_step_dist())
+                for sp in self.stepper_positions}
+            filled_trig_spos = {
+                s.get_name(): trig_kin_spos.get(s.get_name(),
+                                                kin_spos[s.get_name()])
+                for s in kin.get_steppers()}
+            trig_cart = kin.calc_position(filled_trig_spos)
+            start_cart = kin.calc_position(kin_spos)
+            self.distance_elapsed = [
+                (t - s) if (t is not None and s is not None) else 0.
+                for t, s in zip(trig_cart, start_cart)]
             if any(over_steps.values()):
                 self.toolhead.set_position(movepos)
                 halt_kin_spos = {s.get_name(): s.get_commanded_position()
@@ -159,6 +193,27 @@ class HomingMove:
             if sp.start_pos == sp.trig_pos:
                 return sp.endstop_name
         return None
+    # Return True when every homing axis fell short of min_dist by at
+    # least the hardcoded tolerance — i.e. nothing in the homing batch
+    # showed a reliably long first-pass travel. Used by the sensorless-
+    # homing state machine to decide whether to rehome against
+    # min_home_dist. `homing_axes` is a string of axis letters
+    # (e.g. "x", "xy", "xyz"). `all` (not `any`) is required for
+    # kinematics like Delta/Deltesian where home_rails passes
+    # homing_axes="xyz" but cartesian motion is along a single axis —
+    # `any` would force a rehome on every Delta home because the two
+    # non-moving cartesian axes always read 0. The 0.5 mm tolerance
+    # absorbs sub-mm StallGuard jitter (motor current/temperature/
+    # belt-backlash) that would otherwise force a rehome cycle without
+    # improving accuracy.
+    def moved_less_than_dist(self, min_dist, homing_axes, tolerance=0.5):
+        axis_indices = [i for i, ch in enumerate("xyz") if ch in homing_axes]
+        moved = [
+            dist for i, dist in enumerate(self.distance_elapsed)
+            if i in axis_indices]
+        return bool(moved) and all(
+            abs(d) < min_dist and (min_dist - abs(d)) >= tolerance
+            for d in moved)
 
 # State tracking of homing requests
 class Homing:
@@ -185,6 +240,50 @@ class Homing:
         return thcoord
     def set_homed_position(self, pos):
         self.toolhead.set_position(self._fill_coord(pos))
+    # Pre/post-homing TMC current swap. Collect every rail whose
+    # steppers are active on the axes being homed, then invoke each
+    # rail's current helpers in one pass so the dwell required after
+    # the current swap fires exactly once (the maximum across all
+    # affected helpers), regardless of how many rails participate.
+    def _set_current_homing(self, homing_axes, pre_homing):
+        logging.info("SL-homing: adjusting current for homing axes: %s",
+                     homing_axes)
+        print_time = self.toolhead.get_last_move_time()
+        affected_rails = set()
+        for axis_name in homing_axes:
+            affected_rails.update(
+                self.toolhead.get_active_rails_for_axis(axis_name))
+        dwell_time = 0.
+        for rail in affected_rails:
+            get_chs = getattr(rail, 'get_tmc_current_helpers', None)
+            if get_chs is None:
+                continue
+            for ch in get_chs():
+                if ch is None:
+                    continue
+                dwell_time = max(
+                    dwell_time,
+                    ch.set_current_for_homing(print_time, pre_homing))
+        if dwell_time:
+            self.toolhead.dwell(dwell_time)
+    # Apply any per-rail homing_accel override for the duration of a
+    # homing move. Called with pre_homing=True before the move, and
+    # pre_homing=False after, so max_accel unwinds to the configured
+    # value.
+    def _set_homing_accel(self, accel, pre_homing):
+        if accel is None:
+            return
+        if pre_homing:
+            self.toolhead.set_accel(accel)
+        else:
+            self.toolhead.reset_accel()
+    # Explicit endstop-state reset before homing. Stale StallGuard
+    # triggers from a prior home can otherwise cause the next home to
+    # trigger immediately on move start.
+    def _reset_endstop_states(self, endstops):
+        print_time = self.toolhead.get_last_move_time()
+        for es, _ in endstops:
+            es.query_endstop(print_time)
     def home_rails(self, rails, forcepos, movepos):
         # Notify of upcoming homing operation
         self.printer.send_event("homing:home_rails_begin", self, rails)
@@ -194,32 +293,98 @@ class Homing:
         startpos = self._fill_coord(forcepos)
         homepos = self._fill_coord(movepos)
         self.toolhead.set_position(startpos, homing_axes=homing_axes)
-        # Perform first home
+        # Collect endstops across all participating rails. All rails in
+        # a single home_rails() call share their homing parameters via
+        # the first rail's homing_info.
         endstops = [es for rail in rails for es in rail.get_endstops()]
         hi = rails[0].get_homing_info()
-        hmove = HomingMove(self.printer, endstops)
-        hmove.homing_move(homepos, hi.speed)
-        # Perform second home
-        if hi.retract_dist:
-            # Retract
-            startpos = self._fill_coord(forcepos)
-            homepos = self._fill_coord(movepos)
-            axes_d = [hp - sp for hp, sp in zip(homepos, startpos)]
-            move_d = math.sqrt(sum([d*d for d in axes_d[:3]]))
-            retract_r = min(1., hi.retract_dist / move_d)
-            retractpos = [hp - ad * retract_r
-                          for hp, ad in zip(homepos, axes_d)]
-            self.toolhead.move(retractpos, hi.retract_speed)
-            # Home again
-            startpos = [rp - ad * retract_r
-                        for rp, ad in zip(retractpos, axes_d)]
-            self.toolhead.set_position(startpos)
+        try:
+            # Pre-homing setup runs inside the try so that a partial
+            # failure (e.g. a TMC driver write error mid-current-swap
+            # on a multi-rail batch) still hits the finally and
+            # attempts to roll the affected drivers back to
+            # run_current.  The rollback is idempotent — drivers that
+            # never moved are no-ops in needs_*_current_change().
+            #
+            # Order: optional homing-accel override, then TMC current
+            # swap with a single batched dwell, then endstop state
+            # reset so stale StallGuard triggers don't fire on the
+            # first move.
+            self._set_homing_accel(hi.accel, pre_homing=True)
+            self._set_current_homing(homing_axes, pre_homing=True)
+            self._reset_endstop_states(endstops)
+            # Perform first home
+            logging.debug("SL-homing: first home at speed %s to %s",
+                          hi.speed, homepos)
             hmove = HomingMove(self.printer, endstops)
-            hmove.homing_move(homepos, hi.second_homing_speed)
-            if hmove.check_no_movement() is not None:
-                raise self.printer.command_error(
-                    "Endstop %s still triggered after retract"
-                    % (hmove.check_no_movement(),))
+            hmove.homing_move(homepos, hi.speed)
+            # Decide whether the first pass moved far enough for a
+            # StallGuard-based endstop trigger to be reliable. If not,
+            # rehome against min_home_dist instead of retract_dist.
+            needs_rehome = False
+            retract_dist = hi.retract_dist
+            if (hi.use_sensorless_homing
+                and hmove.moved_less_than_dist(hi.min_home_dist,
+                                                homing_axes)):
+                needs_rehome = True
+                retract_dist = hi.min_home_dist
+                logging.info(
+                    "SL-homing: rehome triggered (min_home_dist=%s)",
+                    hi.min_home_dist)
+            # Perform second home
+            if retract_dist:
+                # Retract — computed kinematic-agnostically via
+                # axes_d/retract_r so Delta/CoreXZ/etc. are handled
+                # uniformly (no axis-specific arithmetic).
+                startpos = self._fill_coord(forcepos)
+                homepos = self._fill_coord(movepos)
+                axes_d = [hp - sp for hp, sp in zip(homepos, startpos)]
+                move_d = math.sqrt(sum([d*d for d in axes_d[:3]]))
+                retract_r = min(1., retract_dist / move_d)
+                retractpos = [hp - ad * retract_r
+                              for hp, ad in zip(homepos, axes_d)]
+                self.toolhead.move(retractpos, hi.retract_speed)
+                # Run the second pass only when a non-sensorless home
+                # is happening, or when the first sensorless pass came
+                # up short and a rehome is needed.
+                if (not hi.use_sensorless_homing) or needs_rehome:
+                    # Home again
+                    startpos = [rp - ad * retract_r
+                                for rp, ad in zip(retractpos, axes_d)]
+                    self.toolhead.set_position(startpos)
+                    self._reset_endstop_states(endstops)
+                    hmove = HomingMove(self.printer, endstops)
+                    hmove.homing_move(homepos, hi.second_homing_speed)
+                    if hmove.check_no_movement() is not None:
+                        raise self.printer.command_error(
+                            "Endstop %s still triggered after retract"
+                            % (hmove.check_no_movement(),))
+                    if (hi.use_sensorless_homing and needs_rehome
+                            and hmove.moved_less_than_dist(
+                                hi.min_home_dist, homing_axes)):
+                        raise self.printer.command_error(
+                            "Early homing trigger on second home!")
+                    # After a rehome second pass, retract once more to
+                    # leave the toolhead at the conventional post-home
+                    # standoff distance.
+                    if needs_rehome and hi.retract_dist:
+                        startpos = self._fill_coord(forcepos)
+                        homepos = self._fill_coord(movepos)
+                        axes_d = [hp - sp
+                                  for hp, sp in zip(homepos, startpos)]
+                        move_d = math.sqrt(sum([d*d for d in axes_d[:3]]))
+                        retract_r = min(1., hi.retract_dist / move_d)
+                        retractpos = [hp - ad * retract_r
+                                      for hp, ad in zip(homepos, axes_d)]
+                        self.toolhead.move(retractpos, hi.retract_speed)
+        finally:
+            # Guarantee the motors are back to run_current (and any
+            # homing-accel override is rolled back) even when the
+            # homing move raised an error. Without this, an SL-homing
+            # timeout would leave the driver stuck on home_current
+            # until the user caught it in HMI.
+            self._set_current_homing(homing_axes, pre_homing=False)
+            self._set_homing_accel(hi.accel, pre_homing=False)
         # Signal home operation complete
         self.toolhead.flush_step_generation()
         self.trigger_mcu_pos = {sp.stepper_name: sp.trig_pos

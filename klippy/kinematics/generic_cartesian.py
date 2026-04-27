@@ -120,6 +120,19 @@ class GenericCartesianKinematics:
     def __init__(self, toolhead, config):
         self.printer = config.get_printer()
         self._load_kinematics(config)
+        # Expose underlying rails so consumers that walk kin.rails
+        # (e.g. toolhead.get_active_rails_for_axis() for the
+        # sensorless-homing TMC current swap) find the carriage-backed
+        # rails on this kinematic too.  Order follows carriage
+        # iteration; duplicates are dropped.
+        seen = set()
+        self.rails = []
+        for carriage in self.all_carriages.values():
+            rail = carriage.get_rail()
+            if id(rail) in seen:
+                continue
+            seen.add(id(rail))
+            self.rails.append(rail)
         for s in self.get_steppers():
             s.set_trapq(toolhead.get_trapq())
         self.dc_module = None

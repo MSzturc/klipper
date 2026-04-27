@@ -208,6 +208,12 @@ class ToolHead:
         # Velocity and acceleration control
         self.max_velocity = config.getfloat('max_velocity', above=0.)
         self.max_accel = config.getfloat('max_accel', above=0.)
+        # Snapshot taken in set_accel() and restored by reset_accel()
+        # so a per-rail homing_accel override unwinds back to whatever
+        # the live max_accel was at home start (which may differ from
+        # the configured value if SET_VELOCITY_LIMIT/M204 changed it
+        # at runtime).
+        self._pre_home_max_accel = self.max_accel
         self.min_cruise_ratio = config.getfloat('minimum_cruise_ratio',
                                                 0.5, below=1., minval=0.)
         self.square_corner_velocity = config.getfloat(
@@ -548,6 +554,32 @@ class ToolHead:
         self._calc_junction_deviation()
         return (self.max_velocity, self.max_accel,
                 self.square_corner_velocity, self.min_cruise_ratio)
+    # Temporary max_accel override used by the sensorless-homing
+    # state machine when a rail declares a homing_accel. Call set_accel
+    # pre-home, reset_accel post-home. set_accel snapshots the live
+    # max_accel (so any prior SET_VELOCITY_LIMIT/M204 runtime override
+    # is preserved) and reset_accel restores that snapshot — the
+    # homing override unwinds without clobbering user-set limits.
+    def set_accel(self, accel):
+        self._pre_home_max_accel = self.max_accel
+        self.max_accel = accel
+        self._calc_junction_deviation()
+    def reset_accel(self):
+        self.max_accel = self._pre_home_max_accel
+        self._calc_junction_deviation()
+    def get_active_rails_for_axis(self, axis):
+        # Return the subset of kinematic rails whose steppers are active
+        # on the named cartesian axis ("x", "y", "z"). Used by the homing
+        # layer to figure out which TMC current helpers must participate
+        # in a pre/post-home current swap.
+        active_rails = []
+        rails = getattr(self.kin, 'rails', None) or []
+        for rail in rails:
+            for stepper in rail.get_steppers():
+                if stepper.is_active_axis(axis):
+                    active_rails.append(rail)
+                    break
+        return active_rails
 
 # Support common G-Code commands relative to the toolhead
 class ToolHeadCommandHelper:

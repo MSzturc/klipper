@@ -364,6 +364,15 @@ class GenericPrinterRail:
         self.endstops = []
         self.endstop_map = {}
         self.endstop_pin = config.get('endstop_pin')
+        # Sensorless-homing: detect a virtual endstop early so the default
+        # for `use_sensorless_homing` can be True when the rail uses one.
+        # (":z_virtual_endstop" is the probe virtual endstop — NOT a TMC
+        # stallguard virtual endstop — so it must not activate SL-homing
+        # defaults.)
+        endstop_is_virtual = (
+            self.endstop_pin is not None
+            and ':virtual_endstop' in self.endstop_pin
+            and ':z_virtual_endstop' not in self.endstop_pin)
         # Primary endstop position
         self.query_endstops = self.printer.load_object(config, 'query_endstops')
         mcu_endstop = self.lookup_endstop(self.endstop_pin, self.name)
@@ -388,13 +397,31 @@ class GenericPrinterRail:
                 "position_endstop in section '%s' must be between"
                 " position_min and position_max" % config.get_name())
         # Homing mechanics
+        self.use_sensorless_homing = config.getboolean(
+            'use_sensorless_homing', endstop_is_virtual)
         self.homing_speed = config.getfloat('homing_speed', 5.0, above=0.)
+        # When StallGuard-based homing is in use the second homing pass must
+        # travel at the same speed as the first — StallGuard sensitivity is
+        # tied to motor speed, so a half-speed retest produces unreliable
+        # triggers. See Kalico PR #549 / user's own prior implementation
+        # (predates Kalico's merge by four days).
+        default_second_homing_speed = self.homing_speed / 2.
+        if self.use_sensorless_homing:
+            default_second_homing_speed = self.homing_speed
         self.second_homing_speed = config.getfloat(
-            'second_homing_speed', self.homing_speed/2., above=0.)
+            'second_homing_speed', default_second_homing_speed, above=0.)
         self.homing_retract_speed = config.getfloat(
             'homing_retract_speed', self.homing_speed, above=0.)
         self.homing_retract_dist = config.getfloat(
             'homing_retract_dist', 5., minval=0.)
+        # Minimum first-pass travel expected when SL-homing. When the first
+        # pass ends short of this distance the homing loop rehomes against
+        # min_home_dist as the retract amount. Default tracks retract_dist.
+        self.min_home_dist = config.getfloat(
+            'min_home_dist', self.homing_retract_dist, minval=0.)
+        # Optional per-rail homing acceleration override — programmed on
+        # the toolhead for the duration of the homing moves on this rail.
+        self.homing_accel = config.getfloat('homing_accel', None, above=0.)
         self.homing_positive_dir = config.getboolean(
             'homing_positive_dir', None)
         if self.homing_positive_dir is None:
@@ -427,15 +454,45 @@ class GenericPrinterRail:
     def get_homing_info(self):
         homing_info = collections.namedtuple('homing_info', [
             'speed', 'position_endstop', 'retract_speed', 'retract_dist',
-            'positive_dir', 'second_homing_speed'])(
+            'positive_dir', 'second_homing_speed',
+            'use_sensorless_homing', 'min_home_dist', 'accel'])(
                 self.homing_speed, self.position_endstop,
                 self.homing_retract_speed, self.homing_retract_dist,
-                self.homing_positive_dir, self.second_homing_speed)
+                self.homing_positive_dir, self.second_homing_speed,
+                self.use_sensorless_homing, self.min_home_dist,
+                self.homing_accel)
         return homing_info
     def get_steppers(self):
         return list(self.steppers)
     def get_endstops(self):
         return list(self.endstops)
+    def get_tmc_current_helpers(self):
+        # Return one current helper per stepper on this rail (some rails
+        # carry multiple independently-driven steppers — dual-Z, IDEX,
+        # dual-Y gantries — and each needs its own HOME_CURRENT swap).
+        # Resolved lazily at first call to honour the invariant that TMC
+        # driver sections are parsed after stepper sections: the lookup
+        # must run at printer-connect time, not at rail __init__.
+        helpers = getattr(self, '_tmc_current_helpers', None)
+        if helpers is None:
+            # Build a (stepper_name -> current_helper) map by iterating
+            # all TMC driver sections — they are registered as
+            # "tmc2130 stepper_x", "tmc2209 stepper_y", etc., with the
+            # stepper name as the last token of the section name.
+            tmc_by_stepper = {}
+            for obj_name, obj in self.printer.lookup_objects():
+                parts = obj_name.split()
+                if len(parts) >= 2 and parts[0].startswith('tmc'):
+                    ch = getattr(obj, 'current_helper', None)
+                    if ch is None:
+                        get_ch = getattr(obj, 'get_current_helper', None)
+                        if get_ch is not None:
+                            ch = get_ch()
+                    if ch is not None:
+                        tmc_by_stepper[' '.join(parts[1:])] = ch
+            helpers = [tmc_by_stepper.get(s.get_name()) for s in self.steppers]
+            self._tmc_current_helpers = helpers
+        return helpers
     def lookup_endstop(self, endstop_pin, name):
         ppins = self.printer.lookup_object('pins')
         pin_params = ppins.parse_pin(endstop_pin, True, True)
