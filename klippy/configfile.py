@@ -135,17 +135,194 @@ class ConfigWrapper:
 
 
 ######################################################################
+# Variable interpolation and arithmetic evaluation
+######################################################################
+
+# Matches "${[section.]option[:default]}" placeholders that are NOT preceded
+# by a backslash. The negative-lookbehind lets a config author emit a literal
+# placeholder by writing "\${...}" (useful when a macro returns a string
+# that contains "${...}").
+_INTERPOLATION_KEYCRE = re.compile(
+    r"(?<!\\)\$\{"
+    r"(?:(?P<section>[^.:${}]+)[.:])?"
+    r"(?P<option>[^${}:]+)"
+    r"(?::(?P<default>[^{}]+))?"
+    r"\}"
+)
+
+# Matches arithmetic expressions including the supported function calls.
+_ARITHMETIC_PATTERN = re.compile(
+    r'^[0-9.\+\-\*/\s]+$|^min\(.+\)$|^max\(.+\)$|^abs\(.+\)$|^round\(.+\)$'
+)
+
+
+class SectionInterpolation(configparser.Interpolation):
+    """Variable interpolation of the form ${[section.]option[:default]}.
+
+    After all placeholders are resolved, evaluates the result as an
+    arithmetic expression if it matches one of the supported forms
+    (numeric, min, max, abs, round).
+
+    Authors can opt out of interpolation by escaping the leading dollar
+    sign, e.g. "\\${something}", which is left as a literal "${something}"
+    after interpolation.
+    """
+
+    def __init__(self, access_tracking):
+        self.access_tracking = access_tracking
+        # Tracks (section, option) tuples whose interpolation is currently in
+        # flight. Resolving a placeholder calls back into parser.get(), which
+        # re-enters before_get with a fresh depth counter; without this set a
+        # cycle like a=${b}, b=${a} would recurse until Python raises
+        # RecursionError instead of the documented InterpolationDepthError.
+        self._in_progress = set()
+
+    def before_get(self, parser, section, option, value, defaults):
+        # configparser sometimes hands non-string defaults through here
+        # (e.g. when an option has been set programmatically). Skip those
+        # rather than crashing on the regex search.
+        if not isinstance(value, str):
+            return value
+
+        key = (section, option)
+        if key in self._in_progress:
+            # Re-entry on the same option means the substitution chain has
+            # looped. Raise the documented error instead of letting Python's
+            # recursion limit blow up.
+            raise configparser.InterpolationDepthError(option, section, value)
+
+        is_outermost = not self._in_progress
+        self._in_progress.add(key)
+        try:
+            depth = configparser.MAX_INTERPOLATION_DEPTH
+            while depth:
+                depth -= 1
+                match = _INTERPOLATION_KEYCRE.search(value)
+                if not match:
+                    break
+
+                sect = match.group("section") or section
+                opt = match.group("option")
+                dflt = match.group("default")
+
+                try:
+                    if (sect, opt) in self.access_tracking:
+                        const = self.access_tracking[(sect, opt)]
+                    else:
+                        const = parser.get(sect, opt)
+                except (configparser.NoSectionError,
+                        configparser.NoOptionError):
+                    if dflt is not None:
+                        const = dflt
+                    else:
+                        raise
+
+                value = value[: match.start()] + str(const) + value[match.end():]
+
+            # If the loop exhausted all substitution steps and unresolved
+            # placeholders remain, the chain is too deep.
+            if _INTERPOLATION_KEYCRE.search(value):
+                raise configparser.InterpolationDepthError(
+                    option, section, value)
+        finally:
+            self._in_progress.discard(key)
+
+        # Evaluate arithmetic on every frame so indirect references see the
+        # numeric result rather than the raw expression — otherwise a sibling
+        # like c=${b}*4 where b=1+2 would resolve to "1+2*4" (=9) instead of
+        # "3*4" (=12) due to lost operator precedence.
+        value = _evaluate_arithmetic_if_possible(value)
+
+        # Cache the pre-strip, post-arithmetic form. Inner recursions that
+        # consult access_tracking must see the literal "\${...}" so the
+        # outer regex (which already excludes escaped placeholders) does not
+        # re-interpret them — see the outermost-only escape-strip below.
+        self.access_tracking.setdefault((section, option), value)
+
+        # Strip the escape backslash only for the outermost interpolation.
+        # If we did this on every recursion, an indirect reference like
+        # a=${section.opt} where opt="\${foo}" would receive "${foo}" from
+        # the inner call and the outer loop would re-interpret it as a
+        # placeholder, breaking escape support through indirection.
+        if is_outermost and "\\${" in value:
+            value = value.replace("\\${", "${")
+        return value
+
+
+def _evaluate_arithmetic_if_possible(value):
+    test_str = value.strip()
+    if not _ARITHMETIC_PATTERN.match(test_str):
+        return value
+    try:
+        if test_str.startswith("min(") and test_str.endswith(")"):
+            args = _extract_arithmetic_args(test_str[4:-1])
+            result = min(args)
+        elif test_str.startswith("max(") and test_str.endswith(")"):
+            args = _extract_arithmetic_args(test_str[4:-1])
+            result = max(args)
+        elif test_str.startswith("abs(") and test_str.endswith(")"):
+            args = _extract_arithmetic_args(test_str[4:-1], single=True)
+            result = abs(args[0])
+        elif test_str.startswith("round(") and test_str.endswith(")"):
+            args = _extract_arithmetic_args(test_str[6:-1], single=True)
+            result = round(args[0])
+        else:
+            safe_globals = {"__builtins__": None}
+            safe_locals = {}
+            result = eval(test_str, safe_globals, safe_locals)
+        if isinstance(result, (int, float)):
+            return str(result)
+        return value
+    except Exception as e:
+        logging.debug("Arithmetic evaluation failed for '%s': %s", value, e)
+        return value
+
+
+def _extract_arithmetic_args(arg_string, single=False):
+    args = []
+    for part in arg_string.split(','):
+        part = part.strip()
+        if _ARITHMETIC_PATTERN.match(part):
+            args.append(float(_evaluate_arithmetic_if_possible(part)))
+        else:
+            raise ValueError("Invalid argument '%s' for operation." % (part,))
+    if single and len(args) != 1:
+        raise ValueError("Operation expected a single argument but got %d."
+                         % (len(args),))
+    return args
+
+
+class ConfigNamespace:
+    """Helper for conditional includes: exposes section options as
+    attributes so an expression like "${stepper_x.enabled}" can be
+    evaluated as Python code."""
+    def __init__(self, data):
+        for key, value in data.items():
+            setattr(self, key, value)
+
+    def __getitem__(self, item):
+        return getattr(self, item)
+
+    def __repr__(self):
+        return str(self.__dict__)
+
+
+######################################################################
 # Config file parsing (with include file support)
 ######################################################################
+
+# Used by ConfigFileReader._resolve_include() to detect a conditional
+# include of the form "[include if:${expression} path/to/file.cfg]".
+_CONDITIONAL_INCLUDE_RE = re.compile(r"if:\$\{(.+)\}\s+(.*)")
+
 
 class ConfigFileReader:
     def read_config_file(self, filename):
         try:
-            f = open(filename, 'r')
-            data = f.read()
-            f.close()
-        except:
-            msg = "Unable to open config file %s" % (filename,)
+            with open(filename, 'r') as f:
+                data = f.read()
+        except Exception as e:
+            msg = "Unable to open config file %s: %s" % (filename, e)
             logging.exception(msg)
             raise error(msg)
         return data.replace('\r\n', '\n')
@@ -163,14 +340,35 @@ class ConfigFileReader:
             if pos >= 0:
                 lines[i] = line[:pos]
         sbuffer = io.StringIO('\n'.join(lines))
+        # Read into a temporary parser so we can apply printer.cfg-overrides
+        # semantics: a value already present in fileconfig (set earlier in
+        # the include chain or by the main printer.cfg) is NOT overwritten
+        # by a later include. This makes the main printer.cfg the source of
+        # truth and lets sub-configs declare defaults.
+        temp_fileconfig = configparser.RawConfigParser(
+            strict=False,
+            inline_comment_prefixes=(';', '#'),
+            interpolation=fileconfig._interpolation,
+        )
         if sys.version_info.major >= 3:
-            fileconfig.read_file(sbuffer, filename)
+            temp_fileconfig.read_file(sbuffer, filename)
         else:
-            fileconfig.readfp(sbuffer, filename)
+            temp_fileconfig.readfp(sbuffer, filename)
+        for section in temp_fileconfig.sections():
+            if not fileconfig.has_section(section):
+                fileconfig.add_section(section)
+            for option in temp_fileconfig.options(section):
+                if not fileconfig.has_option(section, option):
+                    val = temp_fileconfig.get(section, option, raw=True)
+                    fileconfig.set(section, option, val)
     def _create_fileconfig(self):
+        access_tracking = {}
         if sys.version_info.major >= 3:
             fileconfig = configparser.RawConfigParser(
-                strict=False, inline_comment_prefixes=(';', '#'))
+                strict=False,
+                inline_comment_prefixes=(';', '#'),
+                interpolation=SectionInterpolation(access_tracking),
+            )
         else:
             fileconfig = configparser.RawConfigParser()
         return fileconfig
@@ -178,52 +376,156 @@ class ConfigFileReader:
         fileconfig = self._create_fileconfig()
         self.append_fileconfig(fileconfig, data, filename)
         return fileconfig
+    def build_fileconfig_with_includes(self, data, filename):
+        fileconfig = self._create_fileconfig()
+        self._parse_config(data, filename, fileconfig, set())
+        # After all includes are resolved, expand placeholders so later
+        # consumers see the final values. Entries that interpolate to the
+        # literal string "None" are removed entirely (the "default value
+        # 'None'" idiom for "no value provided").
+        self._expand_all_values(fileconfig)
+        return fileconfig
+    def _expand_all_values(self, fileconfig):
+        for section in fileconfig.sections():
+            for option in fileconfig.options(section):
+                val = fileconfig.get(section, option)
+                if val == "None":
+                    fileconfig.remove_option(section, option)
+                elif "${" not in val:
+                    # Persist the resolved value so consumers see the final
+                    # form. Skip the write-back for values that still hold a
+                    # literal "${...}" (originally escaped as "\${...}") — a
+                    # second get() call would otherwise try to interpolate
+                    # the literal and fail.
+                    fileconfig.set(section, option, val)
     def _resolve_include(self, source_filename, include_spec, fileconfig,
                          visited):
+        # Conditional include: "[include if:${expr} path]"
+        condition_match = _CONDITIONAL_INCLUDE_RE.match(include_spec)
+        if condition_match:
+            expression, include_path = condition_match.groups()
+            def convert_value(value):
+                try:
+                    if value.lower() == "true":
+                        return True
+                    if value.lower() == "false":
+                        return False
+                    if value.isdigit():
+                        return int(value)
+                    if "." in value:
+                        return float(value)
+                    return value
+                except ValueError:
+                    return value
+            context = {
+                section: ConfigNamespace(
+                    {key: convert_value(value)
+                     for key, value in fileconfig.items(section)})
+                for section in fileconfig.sections()
+            }
+            try:
+                condition_result = eval(expression,
+                                        {"__builtins__": None}, context)
+            except Exception as e:
+                logging.warning("Failed to evaluate condition '%s': %s",
+                                expression, e)
+                condition_result = False
+            if not condition_result:
+                logging.info("Condition '%s' not met, skipping include %s",
+                             expression, include_path)
+                return None
+        else:
+            include_path = include_spec
+
+        # Allow the include path itself to reference variables, so a config
+        # can write "[include ${constants.profile}.cfg]".
+        try:
+            include_path = self._interpolate_include_path(include_path,
+                                                          fileconfig)
+        except ValueError as e:
+            logging.warning("Failed to resolve interpolation in include "
+                            "'%s': %s", include_spec, e)
+            return None
+
+        # Resolve relative include paths against the directory of the file
+        # that issued the include, not the main printer.cfg directory.
         dirname = os.path.dirname(source_filename)
-        include_spec = include_spec.strip()
-        include_glob = os.path.join(dirname, include_spec)
-        include_filenames = glob.glob(include_glob)
+        include_glob = os.path.join(dirname, include_path)
+        include_glob = os.path.abspath(include_glob)
+
+        # Recursive glob lets sub-config trees be pulled in with a single
+        # "[include sub/**/*.cfg]" line.
+        include_filenames = glob.glob(include_glob, recursive=True)
         if not include_filenames and not glob.has_magic(include_glob):
-            # Empty set is OK if wildcard but not for direct file reference
             raise error("Include file '%s' does not exist" % (include_glob,))
         include_filenames.sort()
         for include_filename in include_filenames:
             include_data = self.read_config_file(include_filename)
             self._parse_config(include_data, include_filename, fileconfig,
                                visited)
-        return include_filenames
+        return None
+    def _interpolate_include_path(self, value, fileconfig):
+        # Bounded substitution loop: each pass replaces exactly one
+        # placeholder, so the same ${section.option} appearing twice in
+        # an include path (e.g. "[include ${A.x}/${A.x}.cfg]") resolves
+        # in two passes without false-positive cycle detection. A genuine
+        # cycle — an escaped self-reference like
+        #   profile: \${constants.profile}
+        #   [include ${constants.profile}.cfg]
+        # — exhausts the depth counter (fileconfig.get() returns the
+        # literal "${constants.profile}" since SectionInterpolation
+        # strips the escape on the outermost call) and trips
+        # InterpolationDepthError instead of looping forever.
+        depth = configparser.MAX_INTERPOLATION_DEPTH
+        while depth:
+            depth -= 1
+            match = _INTERPOLATION_KEYCRE.search(value)
+            if not match:
+                break
+            sect = match.group("section") or "constants"
+            opt = match.group("option")
+            dflt = match.group("default")
+            try:
+                replacement = fileconfig.get(sect, opt)
+            except (configparser.NoSectionError, configparser.NoOptionError):
+                if dflt is not None:
+                    replacement = dflt
+                else:
+                    raise ValueError(
+                        "'%s.%s' not found and no default provided"
+                        % (sect, opt))
+            value = value[: match.start()] + replacement + value[match.end():]
+        if _INTERPOLATION_KEYCRE.search(value):
+            raise configparser.InterpolationDepthError(
+                opt, sect, value)
+        return value
     def _parse_config(self, data, filename, fileconfig, visited):
         path = os.path.abspath(filename)
         if path in visited:
-            raise error("Recursive include of config file '%s'" % (filename))
+            raise error("Recursive include of config file '%s'" % (filename,))
         visited.add(path)
         lines = data.split('\n')
-        # Buffer lines between includes and parse as a unit so that overrides
-        # in includes apply linearly as they do within a single file
         buf = []
+        pending_includes = []
         for line in lines:
             # Strip trailing comment
             pos = line.find('#')
             if pos >= 0:
                 line = line[:pos]
-            # Process include or buffer line
             mo = configparser.RawConfigParser.SECTCRE.match(line)
             header = mo and mo.group('header')
             if header and header.startswith('include '):
-                self.append_fileconfig(fileconfig, '\n'.join(buf), filename)
-                del buf[:]
-                include_spec = header[8:].strip()
-                self._resolve_include(filename, include_spec, fileconfig,
-                                      visited)
+                # Defer include resolution until after the current file is
+                # fully parsed so values declared in this file (typically
+                # the main printer.cfg) win over identically-named values
+                # in any included sub-config.
+                pending_includes.append(header[8:].strip())
             else:
                 buf.append(line)
         self.append_fileconfig(fileconfig, '\n'.join(buf), filename)
+        for include_spec in pending_includes:
+            self._resolve_include(filename, include_spec, fileconfig, visited)
         visited.remove(path)
-    def build_fileconfig_with_includes(self, data, filename):
-        fileconfig = self._create_fileconfig()
-        self._parse_config(data, filename, fileconfig, set())
-        return fileconfig
 
 
 ######################################################################
@@ -243,8 +545,12 @@ class ConfigAutoSave:
         self.status_save_pending = {}
         self.save_config_pending = False
         gcode = self.printer.lookup_object('gcode')
-        gcode.register_command("SAVE_CONFIG", self.cmd_SAVE_CONFIG,
-                               desc=self.cmd_SAVE_CONFIG_help)
+        # Guard against double-registration so RELOAD_GCODE_MACROS can
+        # rebuild PrinterConfig without crashing on the SAVE_CONFIG handler
+        # already being present.
+        if "SAVE_CONFIG" not in gcode.ready_gcode_handlers:
+            gcode.register_command("SAVE_CONFIG", self.cmd_SAVE_CONFIG,
+                                   desc=self.cmd_SAVE_CONFIG_help)
     def _find_autosave_data(self, data):
         regular_data = data
         autosave_data = ""
@@ -407,6 +713,11 @@ class ConfigAutoSave:
 # Config validation (check for undefined options)
 ######################################################################
 
+# Section name reserved for declaring constants used by ${constants.X}
+# placeholders. Has no runtime object so the unused-options check skips it.
+CONSTANTS_SECTION = 'constants'
+
+
 class ConfigValidate:
     def __init__(self, printer):
         self.printer = printer
@@ -431,6 +742,8 @@ class ConfigValidate:
         # Validate that there are no undefined parameters in the config file
         for section_name in fileconfig.sections():
             section = section_name.lower()
+            if section == CONSTANTS_SECTION:
+                continue
             if section not in valid_sections:
                 raise error("Section '%s' is not a valid config section"
                             % (section,))
