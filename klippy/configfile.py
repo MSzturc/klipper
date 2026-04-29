@@ -500,21 +500,27 @@ class PrinterConfig:
         did_add = self._add_deprecated(res)
         if did_add:
             logging.warning(msg)
+    def warn(self, type, msg, section=None, option=None, value=None):
+        res = {'type': type, 'message': msg}
+        if section is not None:
+            res['section'] = section
+        if option is not None:
+            res['option'] = option
+        if value is not None:
+            res['value'] = value
+        did_add = self._add_deprecated(res)
+        if did_add:
+            logging.warning(msg)
     def deprecate(self, section, option, value=None, msg=None):
         if value is None:
-            res = {'type': 'deprecated_option'}
             defmsg = ("Option '%s' in section '%s' is deprecated."
                    % (option, section))
+            self.warn('deprecated_option', msg or defmsg, section, option)
         else:
-            res = {'type': 'deprecated_value', 'value': value}
             defmsg = ("Value '%s' in option '%s' in section '%s' is deprecated."
                       % (value, option, section))
-        if msg is None:
-            msg = defmsg
-        res['message'] = msg
-        res['section'] = section
-        res['option'] = option
-        self._add_deprecated(res)
+            self.warn('deprecated_value', msg or defmsg,
+                      section, option, value)
     def deprecate_gcode(self, cmd, param=None, value=None, msg=None):
         if param is None:
             defmsg = "Command '%s' is deprecated." % (cmd,)

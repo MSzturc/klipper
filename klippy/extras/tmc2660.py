@@ -114,8 +114,14 @@ MAX_CURRENT = 2.400
 
 class TMC2660CurrentHelper(tmc.BaseTMCCurrentHelper):
     def __init__(self, config, mcu_tmc):
-        super().__init__(config, mcu_tmc, MAX_CURRENT)
-        self.sense_resistor = config.getfloat('sense_resistor')
+        # Resolve before super().__init__ so a stepstick_type with a
+        # lower current ceiling caps the effective max_current the base
+        # class uses to validate run/hold/home_current at config-time.
+        sense_resistor, lookup_max = tmc.resolve_sense_resistor(config)
+        max_current = (MAX_CURRENT if lookup_max is None
+                       else min(MAX_CURRENT, lookup_max))
+        super().__init__(config, mcu_tmc, max_current)
+        self.sense_resistor = sense_resistor
         vsense, cs = self._calc_current(self.req_run_current)
         self.fields.set_field("cs", cs)
         self.fields.set_field("vsense", vsense)
@@ -183,7 +189,7 @@ class TMC2660CurrentHelper(tmc.BaseTMCCurrentHelper):
         # TMC2660 has no separate hold_current — report None for that
         # position; extend with req_home_current at position 4 to match
         # the BaseTMCCurrentHelper contract.
-        return (self.actual_current, None, None, MAX_CURRENT,
+        return (self.actual_current, None, None, self.max_current,
                 self.req_home_current)
 
     def apply_current(self, print_time):

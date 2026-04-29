@@ -272,17 +272,65 @@ FieldFormatters.update({
 # TMC stepper current config helper
 ######################################################################
 
+# Floor for the homing-profile GLOBALSCALER on TMC2240.  Same rationale
+# as TMC5160 — below ~31 the regulator becomes coarse, hurting
+# StallGuard cleanliness more than the small under-current it produces.
+HOMING_GLOBALSCALER_MIN_ROBUST_2240 = 31
+
 class TMC2240CurrentHelper(tmc.BaseTMCCurrentHelper):
     def __init__(self, config, mcu_tmc):
-        # Rref determines the per-range full-scale current on the TMC2240;
-        # evaluate it before the base class parses run/hold/home because
-        # the max_current used for config bounds-checking depends on it.
-        self.Rref = config.getfloat('rref', 12000.,
+        # Rref determines the per-range full-scale current on the TMC2240
+        # and is hardware-fixed by the carrier board.  Mandatory: there
+        # is no safe default.  Evaluated before the base class parses
+        # run/hold/home because max_current depends on it.
+        self.Rref = config.getfloat('rref',
                                     minval=12000., maxval=60000.)
+        # TMC2240 has no physical sense resistor (Rref + KIFS table
+        # define the I-to-cs relationship), so stepstick_type's
+        # sense_resistor entry is meaningless for this driver.  The
+        # max_current cap, however, is still a real hardware limit of
+        # the carrier board — pass required=False so a stepstick_type
+        # without sense_resistor is accepted, then cap max_cur with the
+        # board limit so run/hold/home_current and SET_TMC_CURRENT can
+        # never exceed the stepstick's rated current.
+        _, lookup_max = tmc.resolve_sense_resistor(config, required=False)
         max_cur = self._get_ifs_rms_for(3)
+        if lookup_max is not None:
+            max_cur = min(max_cur, lookup_max)
         super().__init__(config, mcu_tmc, max_cur)
-        current_range = self._calc_current_range(self.req_run_current)
+        # Auto-pick the smallest CURRENT_RANGE that covers every current
+        # the driver can be programmed to during normal operation:
+        # req_run_current, req_home_current, and req_hold_current.  An
+        # auto-range derived from req_run_current alone silently
+        # under-delivers home_current whenever home_current exceeds the
+        # active range's ifs_rms — _calc_homing_current solves IRUN/GS
+        # against _get_ifs_rms(active_range) and saturates at the range
+        # ceiling without raising.  The user can still lock a higher
+        # range for headroom; the config minval ties to the auto-picked
+        # floor so users cannot under-range any of the three currents.
+        # Cap req_hold_current at req_run_current for range selection:
+        # when hold_current is omitted the base class defaults it to
+        # max_current (a sentinel, not a real user request), which would
+        # otherwise force auto_range to 3 regardless of run_current.
+        auto_range = self._calc_current_range(
+            max(self.req_run_current,
+                self.req_home_current,
+                min(self.req_hold_current, self.req_run_current)))
+        current_range = config.getint('current_range', auto_range,
+                                      minval=auto_range, maxval=3)
         self.fields.set_field("current_range", current_range)
+        # When 'driver_cs' is unset (default) the IRUN bits are computed
+        # from the requested current; when set, the user-specified value
+        # is used directly and GLOBALSCALER is solved for it.  Mirrors
+        # the TMC5160 driver_cs convention.
+        self.cs = config.getint('driver_cs', None, minval=0, maxval=31)
+        # Effective sense resistor for the autotune hysteresis math.
+        # TMC2240 has no physical Rsens; its KIFS table at the active
+        # current_range plus Rref defines the same I-to-cs relationship
+        # as Rsens does on TMC5160.  Solving Rsens_equiv from
+        # IRUN_RMS = (cs+1) * VREF_5160 / (32 * sqrt(2) * Rsens) versus
+        # IRUN_RMS = (cs+1) * ifs_rms / 32 yields:
+        self.sense_resistor = 0.325 / (math.sqrt(2.) * self._get_ifs_rms())
         gscaler, irun, ihold = self._calc_current(
             self.req_run_current, self.req_hold_current)
         self.fields.set_field("globalscaler", gscaler)
@@ -301,23 +349,88 @@ class TMC2240CurrentHelper(tmc.BaseTMCCurrentHelper):
                 break
         return current_range
     def _calc_globalscaler(self, current):
+        # Solve GLOBALSCALER given the IRUN value chosen by
+        # _calc_current_bits.  Ceiling rounding keeps the resulting RMS
+        # current at or above the requested value, never below.
+        cs = self._calc_current_bits(current)
         ifs_rms = self._get_ifs_rms()
-        globalscaler = int(((current * 256.) / ifs_rms) + .5)
+        globalscaler = int(math.ceil(
+            (current * 256. * 32.) / (ifs_rms * (1. + cs))))
+        if self.cs is not None and (globalscaler < 32 or globalscaler > 256):
+            # See TMC5160._calc_globalscaler for the full rationale.
+            # In short: with user-pinned driver_cs the auto-CS guarantee
+            # of "GS within [32, 256]" is gone, and silent-clamping in
+            # either direction multi-x mis-programs the actual current.
+            raise self.printer.config_error(
+                "TMC %s: driver_cs=%d cannot deliver %.3fA at the"
+                " active current_range (ifs_rms=%.3fA; raw"
+                " GLOBALSCALER=%d, valid range 32..256). Choose a"
+                " different driver_cs, raise current_range, or omit"
+                " driver_cs to auto-pick."
+                % (self.name, cs, current, ifs_rms, globalscaler))
         globalscaler = max(32, globalscaler)
         if globalscaler >= 256:
             globalscaler = 0
         return globalscaler
-    def _calc_current_bits(self, current, globalscaler):
-        ifs_rms = self._get_ifs_rms()
-        if not globalscaler:
-            globalscaler = 256
-        cs = int((current * 256. * 32.) / (globalscaler * ifs_rms) - 1. + .5)
+    def _calc_current_bits(self, current):
+        if self.cs is None:
+            # Auto: pick the smallest IRUN that, with GLOBALSCALER fixed
+            # at its maximum, can deliver the requested RMS current at
+            # the active current_range.  TMC2240's KIFS table already
+            # speaks RMS, so no sqrt(2)/VREF factors here.
+            ifs_rms = self._get_ifs_rms()
+            cs = int(math.ceil(32. * current / ifs_rms) - 1)
+        else:
+            cs = self.cs
         return max(0, min(31, cs))
     def _calc_current(self, run_current, hold_current):
         gscaler = self._calc_globalscaler(run_current)
-        irun = self._calc_current_bits(run_current, gscaler)
-        ihold = self._calc_current_bits(min(hold_current, run_current), gscaler)
+        irun = self._calc_current_bits(run_current)
+        # Scale IHOLD as a fraction of IRUN so hold/run ratios survive
+        # driver-cs changes; floor-clamp to IRUN so a misconfiguration
+        # cannot raise hold above run.
+        ihold = int(min((hold_current / run_current) * irun, irun))
         return gscaler, irun, ihold
+    def _calc_homing_current(self, homing_current):
+        # Low-noise homing CS / GLOBALSCALER pick — TMC2240 mirror of
+        # the TMC5160 method.  TMC2240 uses ifs_rms (already RMS;
+        # KIFS-based) instead of VREF/sense_resistor, so the formulas
+        # drop the VREF and sqrt(2) factors.  Picks the smallest CS
+        # that fits the requested current at GS in
+        # [HOMING_GLOBALSCALER_MIN_ROBUST_2240..255], starting from
+        # HOMING_DEFAULTS['cs'].  Sets IRUN == IHOLD for cleanest
+        # StallGuard signal during the homing window.
+        ifs_rms = self._get_ifs_rms()
+        if self.homing_cs is not None:
+            cs = max(0, min(31, self.homing_cs))
+        else:
+            cs_default = max(0, min(31, tmc.HOMING_DEFAULTS['cs']))
+            cs = cs_default
+            for candidate in range(cs_default, 32):
+                gs_candidate = (homing_current * 256. * 32.
+                                / (ifs_rms * (candidate + 1)))
+                if gs_candidate <= 255.:
+                    cs = candidate
+                    break
+            else:
+                cs = 31
+        gs_raw = int(round(homing_current * 256. * 32.
+                           / (ifs_rms * (cs + 1))))
+        if gs_raw >= 256:
+            globalscaler = 0  # 0 encodes 256 (full scale)
+        elif gs_raw < HOMING_GLOBALSCALER_MIN_ROBUST_2240:
+            globalscaler = HOMING_GLOBALSCALER_MIN_ROBUST_2240
+        else:
+            globalscaler = gs_raw
+        irun = max(0, min(31, cs))
+        ihold = irun
+        logging.info(
+            "tmc %s homing: cs=%d gs=%d (raw %d) irun=%d ihold=%d "
+            "ifs_rms=%.3fA (target %.3fA)",
+            self.name, cs,
+            globalscaler if globalscaler else 256, gs_raw,
+            irun, ihold, ifs_rms, homing_current)
+        return globalscaler, irun, ihold
     def _calc_current_from_field(self, field_name):
         ifs_rms = self._get_ifs_rms()
         globalscaler = self.fields.get_field("globalscaler")
@@ -329,11 +442,21 @@ class TMC2240CurrentHelper(tmc.BaseTMCCurrentHelper):
         ifs_rms = self._get_ifs_rms()
         run_current = self._calc_current_from_field("irun")
         hold_current = self._calc_current_from_field("ihold")
-        return (run_current, hold_current, self.req_hold_current, ifs_rms,
-                self.req_home_current)
+        # Cap at min(active-range full-scale, stepstick max).  ifs_rms
+        # alone caps to the active CURRENT_RANGE; self.max_current adds
+        # the stepstick_type / Rref-derived board limit so SET_TMC_CURRENT
+        # cannot drive a higher run current than the carrier supports.
+        return (run_current, hold_current, self.req_hold_current,
+                min(ifs_rms, self.max_current), self.req_home_current)
     def apply_current(self, print_time):
-        gscaler, irun, ihold = self._calc_current(
-            self.actual_current, self.req_hold_current)
+        # _homing_active explicit (not derived) so the homing-profile
+        # path runs even when home_current == run_current.
+        if self._homing_active:
+            gscaler, irun, ihold = self._calc_homing_current(
+                self.actual_current)
+        else:
+            gscaler, irun, ihold = self._calc_current(
+                self.actual_current, self.req_hold_current)
         val = self.fields.set_field("globalscaler", gscaler)
         self.mcu_tmc.set_register("GLOBALSCALER", val, print_time)
         self.fields.set_field("ihold", ihold)

@@ -3,9 +3,71 @@
 # Copyright (C) 2018-2020  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, collections
+import logging, math, os, collections
 import stepper
-from . import bulk_sensor
+from . import bulk_sensor, stepstick_defs
+
+
+######################################################################
+# Sense-resistor / stepstick lookup
+######################################################################
+
+# Resolve the sense-resistor value for a TMC driver config section.  The
+# user may supply 'sense_resistor' explicitly, or a 'stepstick_type' that
+# maps to a (sense_resistor, max_current) pair via stepstick_defs.  At
+# least one of the two must be set; configs that omit both fail to load.
+# Returns (sense_resistor, max_current) — max_current is None if no
+# stepstick_type was given (callers fall back to a per-driver default).
+def _ensure_motor_database_loaded(printer, config):
+    # Read the bundled motor_database.cfg once per printer and register
+    # every [motor_constants <name>] section it contains.  Idempotent:
+    # the printer attribute guards re-entry so repeated calls from each
+    # TMC helper at config time collapse to a single parse.
+    if getattr(printer, '_tmc_motor_db_loaded', False):
+        return
+    printer._tmc_motor_db_loaded = True
+    cfg_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                            'motor_database.cfg')
+    configfile = printer.lookup_object('configfile')
+    try:
+        motor_db = configfile.read_config(cfg_path)
+    except Exception as e:
+        raise printer.config_error(
+            "tmc: cannot load bundled motor database '%s' (%s)"
+            % (cfg_path, e))
+    for section in motor_db.get_prefix_sections('motor_constants '):
+        name = section.get_name()
+        # User-defined [motor_constants <name>] takes priority over the
+        # bundled database.  Skip the bundled entry when the user's config
+        # already declares a section with the same name so that
+        # load_object's early-return (section already in printer.objects)
+        # never silently discards the user's definition regardless of the
+        # order sections appear in the config file.
+        if config.fileconfig.has_section(name):
+            continue
+        printer.load_object(motor_db, name)
+
+
+def resolve_sense_resistor(config, required=True):
+    explicit = config.getfloat('sense_resistor', None, above=0.)
+    stepstick = config.get('stepstick_type', None)
+    lookup_sr = lookup_max = None
+    if stepstick is not None:
+        if stepstick not in stepstick_defs.STEPSTICK_DEFS:
+            raise config.error(
+                "Unknown stepstick_type '%s' in section '%s'. "
+                "See klippy/extras/stepstick_defs.py for valid values."
+                % (stepstick, config.get_name()))
+        lookup_sr, lookup_max = stepstick_defs.STEPSTICK_DEFS[stepstick]
+    sense_resistor = explicit if explicit is not None else lookup_sr
+    if sense_resistor is None and required:
+        raise config.error(
+            "Section '%s' must specify either 'sense_resistor' or "
+            "'stepstick_type' so the driver knows the correct sense "
+            "resistance.  See klippy/extras/stepstick_defs.py for the "
+            "list of supported stepstick boards."
+            % (config.get_name(),))
+    return sense_resistor, lookup_max
 
 
 ######################################################################
@@ -63,6 +125,11 @@ class FieldHelper:
                                 minval=-(maxval//2 + 1), maxval=maxval//2)
         else:
             val = config.getint(config_name, default, minval=0, maxval=maxval)
+        if default is None and val is None:
+            # Caller signalled "only write the register if the user set it
+            # explicitly".  Used by write-only registers like SHORT_CONF
+            # that have no readable defaults to round-trip.
+            return
         return self.set_field(field_name, val)
     def pretty_format(self, reg_name, reg_value):
         # Provide a string description of a register
@@ -397,6 +464,10 @@ class TMCCommandHelper:
             with self.enable_mutex:
                 if self.toff is not None:
                     self.fields.set_field("toff", self.toff)
+                # Re-tune so the chopper / hysteresis fields land in the
+                # bulk write below; the driver MCU lost them on the
+                # disconnect.  No-op when autotune is not configured.
+                self.current_helper.tune_driver(force=True)
                 self._init_registers()
                 did_reset = self.echeck_helper.start_checks()
             if did_reset:
@@ -434,7 +505,7 @@ class TMCCommandHelper:
         cur = ch.get_current()
         prev_cur, prev_hold_cur, req_hold_cur, max_cur = cur[:4]
         prev_home_cur = cur[4] if len(cur) > 4 else None
-        run_current = gcmd.get_float('CURRENT', None, minval=0., maxval=max_cur)
+        run_current = gcmd.get_float('CURRENT', None, above=0., maxval=max_cur)
         hold_current = gcmd.get_float('HOLDCURRENT', None,
                                       above=0., maxval=max_cur)
         home_current = gcmd.get_float('HOMECURRENT', None,
@@ -454,7 +525,14 @@ class TMCCommandHelper:
                                 else req_hold_cur)
             toolhead = self.printer.lookup_object('toolhead')
             print_time = toolhead.get_last_move_time()
-            ch.set_current(new_run_current, new_hold_current, print_time)
+            # force=True so apply_current() and tune_driver() always
+            # re-run, even when the requested run current matches the
+            # currently programmed value — autotune may have moved
+            # chopper / hysteresis registers since the last apply, and
+            # SET_TMC_CURRENT semantically commits whatever the user
+            # just typed.
+            ch.set_current(new_run_current, new_hold_current, print_time,
+                           force=True)
             if run_current is not None:
                 ch.set_run_current(run_current)
             if home_current is not None:
@@ -507,6 +585,11 @@ class TMCCommandHelper:
         if self.toff is not None:
             # Shared enable via comms handling
             self.fields.set_field("toff", self.toff)
+        # Autotune before _init_registers so the chopper / hysteresis /
+        # stallguard register fields land in the same bulk write that
+        # _init_registers issues.  Without autotune (no motor/voltage)
+        # this is a cheap no-op.
+        self.current_helper.tune_driver()
         self._init_registers()
         did_reset = self.echeck_helper.start_checks()
         if did_reset:
@@ -824,8 +907,68 @@ def TMCVhighHelper(config, mcu_tmc):
 
 
 ######################################################################
-# Base class for TMC current helpers (sensorless homing support)
+# Base class for TMC current helpers (sensorless homing + autotuning)
 ######################################################################
+
+# Per-driver-type stealthChop PWM frequency targets.  TMC2240 runs hot
+# at the higher 55 kHz target, so it uses 20 kHz instead.
+PWM_FREQ_TARGETS = {
+    'tmc2130': 55e3,
+    'tmc2208': 55e3,
+    'tmc2209': 55e3,
+    'tmc2240': 20e3,
+    'tmc2660': 55e3,
+    'tmc5160': 55e3,
+}
+
+# Conservative fallback if the driver doesn't expose a clock frequency
+# via FFI (e.g. because the chelper does not know about it).  Source:
+# TMC5160A page 122 ("Clock oscillator frequency").
+DEFAULT_TMC_CLOCK_FREQUENCY = 12.5e6
+
+# Per-stepper homing profile defaults.  Applied around every homing
+# move to swap the run-time chopper/coolstep/iholddelay configuration
+# for a low-noise / robust-StallGuard configuration.  Each value is
+# overridden by the corresponding `homing_*` config option when set.
+# CHOPCONF: SpreadCycle, conservative low-noise.
+# COOLCONF: CoolStep off (semin/semax/seup/sedn/seimin all 0); sfilt
+# off by default — set `homing_sfilt: 1` to enable the StallGuard
+# filter when the SG signal is noisy.
+# IHOLD_IRUN: longer iholddelay decays the hold current more slowly,
+# producing a quieter standstill during the brief homing pause.
+# `cs`: low-noise CS for the homing IRUN/IHOLD search; only consumed
+# by drivers that implement _calc_homing_current (TMC5160, TMC2240).
+HOMING_DEFAULTS = {
+    'toff':       3,
+    'tbl':        1,
+    'hstrt':      0,
+    'hend':       4,
+    'tpfd':       4,
+    'chm':        0,
+    'vhighfs':    0,
+    'vhighchm':   0,
+    'semin':      0,
+    'semax':      0,
+    'seup':       0,
+    'sedn':       0,
+    'seimin':     0,
+    'sfilt':      0,
+    'iholddelay': 8,
+    'cs':         8,
+}
+
+# Registers that tune_driver()'s _configure_* helpers may dirty.  After
+# tuning every shadow field is up to date but only IRUN/IHOLD/GLOBALSCALER
+# are flushed (via apply_current); the chopper / coolstep / pwm / threshold
+# registers must be flushed explicitly or the tuned values would only land
+# at the next _init_registers (driver enable / non-critical reconnect).
+TUNE_FLUSH_REGS = (
+    "GCONF",
+    "CHOPCONF", "COOLCONF", "PWMCONF", "IHOLD_IRUN",
+    "TPWMTHRS", "TCOOLTHRS", "THIGH",
+    "SGTHRS", "SG4_THRS", "OTW_OV_VTH",
+)
+
 
 # Shared state machine used by every TMC driver CurrentHelper so the same
 # "run / hold / home" current model is visible to the homing state machine.
@@ -842,6 +985,7 @@ def TMCVhighHelper(config, mcu_tmc):
 class BaseTMCCurrentHelper:
     def __init__(self, config, mcu_tmc, max_current):
         self.printer = config.get_printer()
+        self.driver_type = config.get_name().split()[0]
         self.name = config.get_name().split()[-1]
         self.mcu_tmc = mcu_tmc
         self.fields = mcu_tmc.get_fields()
@@ -862,6 +1006,83 @@ class BaseTMCCurrentHelper:
         self.req_home_current = self.config_home_current
         # Actual value currently programmed on the driver
         self.actual_current = self.req_run_current
+        # ------------------------------------------------------------
+        # Autotuning configuration.  Tuning is opt-in: it activates only
+        # when the user supplies both 'motor:' (referencing a
+        # [motor_constants <name>] section) and 'voltage:'.  Without
+        # those, every per-field config option below still works as a
+        # plain register override; the only thing that gets skipped is
+        # the chopper / hysteresis / stallguard derivation.
+        self.motor = config.get('motor', None)
+        # Auto-load the bundled motor_database.cfg whenever a stepper
+        # references a motor.  The database lives under klippy/extras/
+        # alongside this module — outside the user's config search path —
+        # so users would otherwise need to copy it next to printer.cfg
+        # before [include motor_database.cfg] would resolve.  Each TMC
+        # helper that asks for it triggers _ensure_motor_database_loaded;
+        # the helper itself deduplicates so the parse runs only once per
+        # printer instance.
+        if self.motor is not None:
+            _ensure_motor_database_loaded(self.printer, config)
+        self.voltage = config.getfloat('voltage', None,
+                                       above=0., maxval=60.)
+        self.pwm_freq_target = config.getfloat(
+            'pwm_freq_target',
+            PWM_FREQ_TARGETS.get(self.driver_type, 55e3),
+            minval=10e3, maxval=100e3)
+        self.chopper_freq_target = config.getfloat(
+            'chopper_freq_target', None, minval=10e3, maxval=100e3)
+        self.extra_hysteresis = config.getint('extra_hysteresis', 0,
+                                              minval=0, maxval=15)
+        # Driver-register overrides — None means "let autotune decide".
+        # (driver_cs is parsed by per-driver subclasses and assigned to
+        # self.cs before BaseTMCCurrentHelper sees it; if a subclass did
+        # not set it, fall back to None here so autotune treats it as
+        # auto-compute.)
+        self.tbl = config.getint('driver_TBL', None, minval=0, maxval=3)
+        self.toff = config.getint('driver_TOFF', None, minval=1, maxval=15)
+        self.tpfd = config.getint('driver_TPFD', None, minval=0, maxval=15)
+        if not hasattr(self, 'cs'):
+            self.cs = None
+        self.hstrt = config.getint('driver_HSTRT', None, minval=0, maxval=7)
+        self.hend = config.getint('driver_HEND', None, minval=0, maxval=15)
+        self.sg4_thrs = config.getint('driver_SGTHRS', None,
+                                      minval=0, maxval=255)
+        self.sgt = config.getint('driver_SGT', None,
+                                 minval=-64, maxval=63)
+        self.overvoltage_vth = config.getfloat('overvoltage_vth', None,
+                                               minval=0., maxval=60.)
+        # Cached state populated by tune_driver().
+        self.driver_clock_frequency = DEFAULT_TMC_CLOCK_FREQUENCY
+        self.stepper = None
+        self._last_tuned_current = None
+        self._autotune_skip_logged = False
+        # ------------------------------------------------------------
+        # Per-stepper homing profile overrides.  Each is None by
+        # default so the corresponding HOMING_DEFAULTS value applies.
+        # `homing_cs` is consumed only by drivers with a low-noise CS
+        # search (TMC5160, TMC2240); other drivers just use it as the
+        # CS bits during the homing window.
+        self.homing_toff = config.getint('homing_toff', None,
+                                         minval=1, maxval=15)
+        self.homing_tbl = config.getint('homing_tbl', None,
+                                        minval=0, maxval=3)
+        self.homing_hstrt = config.getint('homing_hstrt', None,
+                                          minval=0, maxval=7)
+        self.homing_hend = config.getint('homing_hend', None,
+                                         minval=0, maxval=15)
+        self.homing_tpfd = config.getint('homing_tpfd', None,
+                                         minval=0, maxval=15)
+        self.homing_sfilt = config.getint('homing_sfilt', None,
+                                          minval=0, maxval=1)
+        self.homing_cs = config.getint('homing_cs', None,
+                                       minval=0, maxval=31)
+        self._homing_active = False
+        # Shadow-field snapshot taken by _apply_homing_profile() so the
+        # post-homing path can put chopper / coolstep / iholddelay back to
+        # their pre-homing values even when autotune is off or the
+        # _last_tuned_current cache shortcuts the run-profile re-derive.
+        self._run_profile_snapshot = None
     # Introspection --------------------------------------------------------
     def needs_home_current_change(self):
         return self.actual_current != self.req_home_current
@@ -890,10 +1111,10 @@ class BaseTMCCurrentHelper:
     # a follow-up swap — including the post-home rollback to
     # run_current — actually re-issues instead of being short-circuited
     # by needs_*_current_change() reporting "already there".
-    def set_current(self, run_current, hold_current, print_time):
+    def set_current(self, run_current, hold_current, print_time, force=False):
         needs_run = run_current != self.actual_current
         needs_hold = self.needs_hold_current_change(hold_current)
-        if not needs_run and not needs_hold:
+        if not force and not needs_run and not needs_hold:
             return
         prev_actual = self.actual_current
         prev_hold = self.req_hold_current
@@ -907,22 +1128,355 @@ class BaseTMCCurrentHelper:
             if needs_hold:
                 self.set_hold_current(prev_hold)
             raise
+        # Re-tune chopper / hysteresis / stallguard for the new current.
+        # Skips internally if autotune is not configured.  The tune
+        # rewrites a number of register fields and flushes them, so
+        # callers who forced a re-apply (SET_TMC_CURRENT) get a fresh
+        # chopper profile that actually lands in hardware.
+        self.tune_driver(run_current, force=force, print_time=print_time)
     # Homing-transition helpers -------------------------------------------
-    # set_current_for_homing(pre_homing=True) swaps to req_home_current;
-    # set_current_for_homing(pre_homing=False) swaps back to req_run_current.
-    # Returns the dwell time the driver requires after the swap (caller
-    # collects the max dwell across all rails in a batch so the toolhead
-    # only dwells once).
+    # set_current_for_homing(pre_homing=True) swaps to the homing
+    # profile (low-noise chopper + req_home_current);
+    # set_current_for_homing(pre_homing=False) restores the run profile
+    # (autotuned chopper + req_run_current).  Returns the dwell time
+    # the driver requires after the swap (caller collects the max dwell
+    # across all rails in a batch so the toolhead only dwells once).
+    # The chopper-profile swap is unconditional even when home_current
+    # equals run_current — homing-noise gain is independent of the
+    # current swap.
     def set_current_for_homing(self, print_time, pre_homing):
-        if pre_homing and self.needs_home_current_change():
-            self.set_current(self.req_home_current, self.req_hold_current,
-                             print_time)
-            return self.current_change_dwell_time
-        if (not pre_homing) and self.needs_run_current_change():
-            self.set_current(self.req_run_current, self.req_hold_current,
-                             print_time)
-            return self.current_change_dwell_time
-        return 0.
+        if pre_homing:
+            self._homing_active = True
+            dwell = 0.
+            if self.needs_home_current_change():
+                self.set_current(self.req_home_current,
+                                 self.req_hold_current, print_time)
+                dwell = self.current_change_dwell_time
+            else:
+                # home_current == actual_current → set_current() would
+                # short-circuit, leaving IRUN/IHOLD/GLOBALSCALER at run
+                # values for the homing window.  Drive apply_current()
+                # directly so the per-driver _homing_active branch
+                # writes the low-noise homing CS/GS/IRUN.
+                self.apply_current(print_time)
+            self._apply_homing_profile(print_time)
+            return dwell
+        # Post-homing: restore run profile first (so the run-tuned
+        # chopper writes are in the bulk that follows), then swap
+        # current back if needed.
+        self._homing_active = False
+        # Put chopper / coolstep / iholddelay back to their pre-homing
+        # shadow values.  Runs unconditionally so the run profile is
+        # restored even if autotune is disabled or the post-homing
+        # tune_driver shortcuts via the _last_tuned_current cache.
+        # Any subsequent tune_driver call in this path may overwrite
+        # the restored fields with newly-derived values at the same
+        # print_time — that is the intended behaviour when autotune
+        # is active.
+        self._restore_run_profile(print_time)
+        dwell = 0.
+        if self.needs_run_current_change():
+            self.set_current(self.req_run_current,
+                             self.req_hold_current, print_time)
+            dwell = self.current_change_dwell_time
+        else:
+            # Same current as before homing.  apply_current() now
+            # sees _homing_active=False and overwrites the homing
+            # IRUN/IHOLD/GLOBALSCALER with run-profile values; the
+            # forced tune_driver re-applies the run-profile chopper /
+            # hysteresis / stallguard / coolstep over the homing ones
+            # and flushes them at the same print_time so the swap is
+            # atomic with the IRUN/IHOLD restore.
+            self.apply_current(print_time)
+            self.tune_driver(self.req_run_current, force=True,
+                             print_time=print_time)
+        return dwell
+    def _apply_homing_profile(self, print_time=None):
+        # Write the homing chopper / coolstep / iholddelay fields and
+        # flush every register touched.  CS selection (the IRUN/IHOLD
+        # bits during the homing window) is handled per-driver in
+        # apply_current() paths that branch on self._homing_active.
+        # Snapshot the pre-homing shadow value of every field we touch
+        # so _restore_run_profile() can put them back unconditionally —
+        # independent of whether autotune is active and independent of
+        # the _last_tuned_current cache.
+        snapshot = {}
+        dirty = set()
+        for field, default in HOMING_DEFAULTS.items():
+            if field == 'cs':
+                continue  # per-driver _calc_homing_current handles CS
+            reg_name = self.fields.lookup_register(field, None)
+            if reg_name is None:
+                continue  # field absent on this driver type
+            snapshot[field] = (self.fields.get_field(field), reg_name)
+            override = getattr(self, 'homing_' + field, None)
+            if override is None:
+                override = default
+            self.fields.set_field(field, override)
+            dirty.add(reg_name)
+        self._run_profile_snapshot = snapshot
+        for reg in dirty:
+            self.mcu_tmc.set_register(reg, self.fields.registers[reg],
+                                      print_time)
+    def _restore_run_profile(self, print_time=None):
+        # Reverse of _apply_homing_profile().  Writes the snapshotted
+        # pre-homing shadow values back into the field cache and flushes
+        # every touched register at print_time.  Subsequent tune_driver
+        # / apply_current calls in the post-homing path may overwrite
+        # these with freshly-tuned values; that is intentional — this
+        # restore guarantees a sane baseline even when autotune is off
+        # (motor/voltage unset → tune_driver returns early) or the
+        # _last_tuned_current cache would skip the re-tune.
+        snapshot = self._run_profile_snapshot
+        if not snapshot:
+            return
+        self._run_profile_snapshot = None
+        dirty = set()
+        for field, (value, reg_name) in snapshot.items():
+            self.fields.set_field(field, value)
+            dirty.add(reg_name)
+        for reg in dirty:
+            self.mcu_tmc.set_register(reg, self.fields.registers[reg],
+                                      print_time)
+    def get_homing_cs(self):
+        return self.homing_cs if self.homing_cs is not None \
+            else HOMING_DEFAULTS['cs']
+    # Autotuning ----------------------------------------------------------
+    # Recomputes chopper / PWM / hysteresis / stallguard / overvoltage
+    # parameters for the current operating point, writes them to the
+    # field shadow, and flushes the touched registers to hardware so the
+    # tuned values take effect immediately rather than at the next driver
+    # init.  Callers either (a) hand the new active current directly
+    # (set_current path), (b) leave it 0 to use config_run_current
+    # (driver-init / _do_enable path), or (c) pass force=True to re-apply
+    # without a current change (SET_TMC_CURRENT / post-homing path).
+    # `print_time` schedules the flush in the motion queue; pass None for
+    # init / reconnect paths where there is no print-time anchor.
+    # Returns silently when autotune is not configured (motor/voltage
+    # missing) or unsupported (driver lacks PWMCONF, e.g. TMC2660).
+    def tune_driver(self, new_current=0, force=False, print_time=None):
+        if self.motor is None or self.voltage is None:
+            return
+        # Autotune was designed for the TMC5160 / TMC2240 register set —
+        # the _configure_* helpers below write fields like pwm_autograd,
+        # pwm_ofs, pwm_reg, pwm_lim, tpfd, faststandstill, multistep_filt
+        # that the older drivers (TMC2130/2208/2209/2660) do not expose.
+        # `tpfd` is the cleanest single marker: it exists only on TMC5160
+        # and TMC2240.  Drivers without it skip with a one-shot info log
+        # so motor/voltage on an unsupported driver is a no-op rather
+        # than a hard crash on the first set_field of a missing field.
+        if self.fields.lookup_register("tpfd", None) is None:
+            if not self._autotune_skip_logged:
+                logging.info("tmc %s: autotune disabled — driver lacks"
+                             " the TMC5160/TMC2240 PWMCONF/CHOPCONF"
+                             " field set", self.name)
+                self._autotune_skip_logged = True
+            return
+        # While the homing profile is active the chopper/coolstep
+        # fields are deliberately set to HOMING_DEFAULTS; tuning would
+        # immediately overwrite them.  The post-homing path explicitly
+        # clears _homing_active before re-tuning, so this guard never
+        # blocks a legitimate run-profile re-derive.
+        if self._homing_active:
+            return
+        if new_current == 0:
+            new_current = self.config_run_current
+        if (not force and self._last_tuned_current is not None
+                and abs(self._last_tuned_current - new_current) < 1e-6):
+            return
+        # The autotune math depends on the per-driver effective sense
+        # resistor.  Subclasses (TMC2130/2660/5160) set self.sense_resistor
+        # directly; TMC2240 derives it from Rref/KIFS at init time.  If a
+        # subclass forgot, log and bail rather than crashing.
+        if not hasattr(self, 'sense_resistor'):
+            logging.info("tmc %s autotune skipped: no sense_resistor", self.name)
+            return
+        # The motor object holds the back-EMF / inductance / resistance
+        # spec.  Resolved on first use; reported once if missing.
+        try:
+            motor_object = self.printer.lookup_object(
+                "motor_constants " + self.motor)
+        except self.printer.config_error as e:
+            logging.error("tmc %s autotune: motor lookup failed (%s)",
+                          self.name, str(e))
+            return
+        # Stepper rotation distance is needed for stallguard / coolstep
+        # velocity thresholds.  Resolved lazily — _do_enable runs after
+        # mcu_identify so by the time tune_driver runs the stepper is
+        # up.
+        if self.stepper is None:
+            try:
+                force_move = self.printer.lookup_object("force_move")
+                self.stepper = force_move.lookup_stepper(self.name)
+            except self.printer.config_error:
+                # Pre-connect tuning attempts (rare); retry on next call.
+                return
+        try:
+            self.driver_clock_frequency = (
+                self.mcu_tmc.get_tmc_frequency()
+                or DEFAULT_TMC_CLOCK_FREQUENCY)
+        except AttributeError:
+            self.driver_clock_frequency = DEFAULT_TMC_CLOCK_FREQUENCY
+        logging.info("tmc %s autotune: tuning for %.3fA at %.0fV (clock %.3f MHz)",
+                     self.name, new_current, self.voltage,
+                     self.driver_clock_frequency / 1e6)
+        self._configure_pwm(motor_object, new_current)
+        new_tbl, new_toff = self._configure_spreadcycle(motor_object,
+                                                        new_current)
+        self._configure_hysteresis(motor_object, new_current,
+                                   new_tbl, new_toff)
+        self._configure_stallguard(new_current)
+        self._configure_coolstep()
+        self._configure_overvoltage()
+        self._configure_highspeed(motor_object, new_current)
+        # Flush every register the _configure_* helpers may have dirtied.
+        # Without this, tuned chopper / PWM / threshold values stay only
+        # in the shadow cache and reach the hardware at the next bulk
+        # _init_registers (driver enable / non-critical reconnect) — so
+        # post-homing retunes and SET_TMC_CURRENT force-reapplies would
+        # not actually change driver behaviour until the next enable.
+        for reg in TUNE_FLUSH_REGS:
+            if reg in self.fields.registers:
+                self.mcu_tmc.set_register(reg, self.fields.registers[reg],
+                                          print_time)
+        # Cache the operating point only after the tune has actually
+        # landed in hardware.  An earlier failure path (motor lookup,
+        # stepper resolution, sense_resistor missing) returns without
+        # touching the cache, so a subsequent retry with the same
+        # current still runs the tune end-to-end instead of being
+        # short-circuited by a "tuning has been attempted" flag.
+        self._last_tuned_current = new_current
+    def _set_velocity_field(self, field, velocity):
+        # tcoolthrs / thigh accept a TSTEP threshold; convert from a
+        # rotation-distance velocity.  Skips silently if the field is
+        # absent on this driver.
+        if self.fields.lookup_register(field, None) is None:
+            return
+        tstep = TMCtstepHelper(self.mcu_tmc, velocity, pstepper=self.stepper)
+        self.fields.set_field(field, tstep)
+    def _configure_pwm(self, motor_object, new_current):
+        pwm_freq, calc_freq = motor_object.pwmfreq(
+            fclk=self.driver_clock_frequency, target=self.pwm_freq_target)
+        pwmgrad = motor_object.pwmgrad(volts=self.voltage,
+                                       fclk=self.driver_clock_frequency)
+        pwmofs = motor_object.pwmofs(volts=self.voltage, current=new_current)
+        logging.info("tmc %s autotune: pwm_freq=%d (~%.1f kHz) pwmgrad=%d"
+                     " pwmofs=%d", self.name, pwm_freq, calc_freq / 1e3,
+                     pwmgrad, pwmofs)
+        self.fields.set_field("pwm_freq", pwm_freq)
+        self.fields.set_field("pwm_autoscale", True)
+        self.fields.set_field("pwm_autograd", True)
+        self.fields.set_field("pwm_grad", pwmgrad)
+        self.fields.set_field("pwm_ofs", pwmofs)
+        self.fields.set_field("pwm_reg", 15)
+        self.fields.set_field("pwm_lim", 4)
+        self.fields.set_field("tpwmthrs", 0xfffff)
+    def _configure_spreadcycle(self, motor_object, new_current):
+        _, calc_freq = motor_object.pwmfreq(
+            fclk=self.driver_clock_frequency, target=self.pwm_freq_target)
+        ncycles = int(math.ceil(self.driver_clock_frequency / calc_freq))
+        tbl = self.tbl or 0
+        tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
+        # If the user pinned driver_TOFF, honour it; otherwise search for
+        # the smallest TOFF whose lowest chopper frequency stays at or
+        # below chopper_freq_target (default 20 kHz so we sit just above
+        # the audible band).
+        if self.toff is None:
+            target = self.chopper_freq_target or 20e3
+            toff = 0
+            while True:
+                tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
+                duty = (new_current * 0.7 / self.voltage
+                        + tblank / (tblank + tsd_duty))
+                chop_low = 1. / ((2. + 4. * duty) * tsd_duty)
+                if chop_low <= target or toff >= 15:
+                    break
+                toff += 1
+            # Back off by one so chop_low sits just above the audible-band
+            # target rather than just below.  Floor at 1 — TOFF=0 is the
+            # CHOPCONF driver-disable code per the TMC datasheet, and
+            # the user-facing driver_TOFF is also bounded minval=1.  At
+            # very high chopper_freq_target / current combinations the
+            # first iteration already meets the constraint and the
+            # decrement would otherwise land on 0.
+            toff = max(toff - 1, 1)
+        else:
+            toff = self.toff
+        # TOFF=1 with TBL=0 is invalid per datasheet; bump TBL.
+        if toff == 1 and tbl == 0:
+            tbl = 1
+            tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
+        tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
+        # Allocate the remaining cycle time to TPFD (passive fast decay).
+        # The (×2 - tblank) accounts for the two slow-decay phases per
+        # cycle minus blanking already counted.
+        pfdcycles = (ncycles
+                     - (tsd_duty * 2. - tblank) * self.driver_clock_frequency)
+        tpfd = (max(0, min(15, int(math.ceil(pfdcycles / 128.))))
+                if self.tpfd is None else self.tpfd)
+        logging.info("tmc %s autotune: tbl=%d toff=%d tpfd=%d",
+                     self.name, tbl, toff, tpfd)
+        self.fields.set_field("tpfd", tpfd)
+        self.fields.set_field("tbl", tbl)
+        self.fields.set_field("toff", toff)
+        return tbl, toff
+    def _configure_hysteresis(self, motor_object, new_current,
+                              new_tbl, new_toff):
+        if self.hstrt is not None and self.hend is not None:
+            hstrt, hend = self.hstrt, self.hend
+        else:
+            hstrt, hend = motor_object.hysteresis(
+                name=self.name, extra=self.extra_hysteresis,
+                fclk=self.driver_clock_frequency, volts=self.voltage,
+                current=new_current, tbl=new_tbl, toff=new_toff,
+                rsense=self.sense_resistor, scale=self.cs)
+        self.fields.set_field("hstrt", hstrt)
+        self.fields.set_field("hend", hend)
+    def _configure_stallguard(self, new_current):
+        coolthrs = 0.75 * self.stepper.get_rotation_distance()[0]
+        if self.fields.lookup_register("sg4_thrs", None) is not None:
+            if self.sg4_thrs is not None:
+                self.fields.set_field("sg4_thrs", self.sg4_thrs)
+                self.fields.set_field("sg4_filt_en", True)
+        elif self.fields.lookup_register("sgthrs", None) is not None:
+            if self.sg4_thrs is not None:
+                self.fields.set_field("sgthrs", self.sg4_thrs)
+        if self.sgt is not None:
+            self.fields.set_field("sgt", self.sgt)
+        # tcoolthrs = velocity above which CoolStep / StallGuard activate.
+        # 0.75 rev/s is a conservative below-print-speed default.
+        self._set_velocity_field("tcoolthrs", coolthrs)
+    def _configure_coolstep(self):
+        # Conservative coolstep / iholddelay defaults that keep current
+        # bounded but avoid stall-recovery oscillation.
+        self.fields.set_field("faststandstill", True)
+        self.fields.set_field("small_hysteresis", False)
+        self.fields.set_field("semin", 2)
+        self.fields.set_field("semax", 4)
+        self.fields.set_field("seup", 3)
+        self.fields.set_field("sedn", 2)
+        self.fields.set_field("seimin", 1)
+        self.fields.set_field("sfilt", 0)
+        self.fields.set_field("iholddelay", 12)
+    def _configure_overvoltage(self):
+        if self.overvoltage_vth is not None:
+            # 0.009732 V/LSB per TMC2240 datasheet.  Guard against drivers
+            # that lack the field (e.g. TMC5160 has no OTW_OV_VTH register).
+            if self.fields.lookup_register("overvoltage_vth", None) is None:
+                return
+            vth = int(self.overvoltage_vth / 0.009732)
+            self.fields.set_field("overvoltage_vth", vth)
+    def _configure_highspeed(self, motor_object, new_current):
+        maxpwmrps = motor_object.maxpwmrps(volts=self.voltage,
+                                           current=new_current)
+        rdist = self.stepper.get_rotation_distance()[0]
+        # 1.2× margin keeps spreadCycle-fullStepping mode below the
+        # physically realisable PWM ceiling.
+        thigh_velocity = 1.2 * maxpwmrps * rdist
+        self._set_velocity_field("thigh", thigh_velocity)
+        self.fields.set_field("vhighfs", False)
+        self.fields.set_field("vhighchm", False)
+        self.fields.set_field("multistep_filt", True)
     # Subclass hook --------------------------------------------------------
     def apply_current(self, print_time):
         raise NotImplementedError(
