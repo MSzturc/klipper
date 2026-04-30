@@ -440,7 +440,8 @@ class ProbeOffsetsHelper:
 # Helper code that can probe a series of points and report the
 # position at each point.
 class ProbePointsHelper:
-    def __init__(self, config, finalize_callback, default_points=None):
+    def __init__(self, config, finalize_callback, default_points=None,
+                 use_offsets=False):
         self.printer = config.get_printer()
         self.finalize_callback = finalize_callback
         self.probe_points = default_points
@@ -453,7 +454,11 @@ class ProbePointsHelper:
         def_move_z = config.getfloat('horizontal_move_z', 5.)
         self.default_horizontal_move_z = def_move_z
         self.speed = config.getfloat('speed', 50., above=0.)
-        self.use_offsets = False
+        # The config key takes precedence over the constructor default so
+        # users can opt their bed_mesh / bed_tilt / etc. section out of
+        # XY-offset compensation regardless of how the caller initialised it.
+        self.use_offsets = config.getboolean("use_probe_xy_offsets",
+                                             use_offsets)
         # Internal probing state
         self.lift_speed = self.speed
         self.probe_offsets = (0., 0., 0.)

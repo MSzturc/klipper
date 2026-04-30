@@ -1,0 +1,30 @@
+# Test case for BDSensor pin alias resolution
+#
+# Verifies that BDSensor's sda_pin / scl_pin / endstop_pin lookups
+# correctly unwrap [board_pins] aliases before sending the resolved
+# hardware pin names to the MCU. The driver communicates with the MCU
+# over the bd_sensor protocol, so the dictionary used here must come
+# from a firmware build with src-y += BD_sensor.c enabled.
+CONFIG bdsensor_alias.cfg
+DICTIONARY stm32h723xx-bdsensor.dict
+
+# Start by homing the printer.
+G28
+G1 F6000
+
+# Z / X / Y moves
+G1 Z1
+G1 X1
+G1 Y1
+
+# Run a probe to exercise the BDSensor endstop wrapper. If the alias
+# lookup is broken, the bd_sensor_register MCU command would have failed
+# at startup with "Unable to find pin PROBE_SENSOR".
+PROBE
+QUERY_PROBE
+
+# Bed mesh exercises the probe through ProbePointsHelper (which now
+# reads use_probe_xy_offsets from the section config) and tests the
+# scl_pin lookup as well.
+BED_MESH_CALIBRATE
+G1 Z5 X0 Y0
