@@ -8,6 +8,17 @@ All dates in this document are approximate.
 
 ## Changes
 
+20260430: The `off_below` parameter in fan config sections is
+deprecated and replaced by `min_power`. Old configs continue to work
+with a deprecation warning emitted at startup; setting both parameters
+in the same section is rejected. The semantics also change: `off_below`
+historically cut the fan to zero when the requested speed was below
+the threshold, while `min_power` linearly maps any non-zero requested
+speed into `[min_power, max_power]` so the fan never sits at a duty
+too low to actually spin. Configs migrating from `off_below=X` to
+`min_power=X` will see slow-speed requests run at `X` (rather than at
+zero); recalibrate if the previous cut-off behaviour was relied on.
+
 20260408: The script `lib/canboot/flash_can.py` has been updated to
 the most current version from
 [Katapult](https://github.com/Arksine/katapult) and as such renamed to

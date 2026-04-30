@@ -1569,7 +1569,9 @@ is enabled.
 [max_speed=<max_speed>]`: Sets the target temperature for a
 temperature_fan. If a target is not supplied, it is set to the
 specified temperature in the config file. If speeds are not supplied,
-no change is applied.
+no change is applied. When the fan is configured with `control: curve`,
+the `target` parameter is not accepted and will raise an error; use
+`min_speed` and `max_speed` to adjust the fan speed range instead.
 
 ### [temperature_probe]
 

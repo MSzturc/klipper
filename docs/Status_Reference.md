@@ -158,7 +158,12 @@ The following information is available in
 [heater_fan some_name](Config_Reference.md#heater_fan) and
 [controller_fan some_name](Config_Reference.md#controller_fan)
 objects:
-- `speed`: The fan speed as a float between 0.0 and 1.0.
+- `speed`: The fan speed as a float between 0.0 and 1.0 (the value the
+  user requested via M106 / SET_FAN_SPEED).
+- `power`: The actual PWM duty the fan is being driven at, as a float
+  between 0.0 and `max_power`. Differs from `speed` when `min_power`
+  or `max_power` are set, since non-zero requested speeds are mapped
+  into [`min_power`, `max_power`].
 - `rpm`: The measured fan speed in rotations per minute if the fan has
   a tachometer_pin defined.
 

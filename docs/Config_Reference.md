@@ -3267,19 +3267,26 @@ pin:
 #   Time (in seconds) to run the fan at full speed when either first
 #   enabling or increasing it by more than 50% (helps get the fan
 #   spinning). The default is 0.100 seconds.
-#off_below: 0.0
-#   The minimum input speed which will power the fan (expressed as a
-#   value from 0.0 to 1.0). When a speed lower than off_below is
-#   requested the fan will instead be turned off. This setting may be
-#   used to prevent fan stalls and to ensure kick starts are
-#   effective. The default is 0.0.
+#min_power:
+#   The minimum PWM duty (expressed as a value from 0.0 to 1.0) the fan
+#   will run at when on. Any non-zero requested speed is linearly
+#   mapped into the range [min_power, max_power], so the fan never
+#   sits at a duty too low to actually spin. A request of zero still
+#   turns the fan fully off. The default is 0.0 (no lift).
 #
 #   This setting should be recalibrated whenever max_power is adjusted.
-#   To calibrate this setting, start with off_below set to 0.0 and the
-#   fan spinning. Gradually lower the fan speed to determine the lowest
-#   input speed which reliably drives the fan without stalls. Set
-#   off_below to the duty cycle corresponding to this value (for
-#   example, 12% -> 0.12) or slightly higher.
+#   To calibrate, set min_power to 0.0 and request a small non-zero
+#   speed; gradually raise min_power until the fan reliably starts and
+#   keeps spinning at low requested speeds.
+#off_below:
+#   Deprecated alias for min_power. Old configs continue to work with
+#   a deprecation warning; new configs should use min_power. Setting
+#   both min_power and off_below in the same section is an error.
+#initial_speed:
+#   If set, the fan is commanded to this speed (a value from 0.0 to
+#   1.0) once at startup, after Klipper finishes loading. Useful for
+#   fans that should run continuously without an explicit gcode
+#   command. Unset by default.
 #tachometer_pin:
 #   Tachometer input pin for monitoring fan speed. A pullup is generally
 #   required. This parameter is optional.
@@ -3441,6 +3448,24 @@ information.
 #gcode_id:
 #   If set, the temperature will be reported in M105 queries using the
 #   given id. The default is to not report the temperature via M105.
+#points:
+#   Required when control is "curve". A list of "<temperature>,<speed>"
+#   pairs (one pair per line, or comma-separated) that defines a fan
+#   curve. The speed is a value from 0.0 to 1.0 and is interpolated
+#   linearly between adjacent points. At least two points are
+#   required, the curve must be monotonically increasing, all
+#   temperatures must lie within [min_temp, target_temp], and all
+#   speeds must lie within [min_speed, max_speed]. Setting a target
+#   via SET_TEMPERATURE_FAN_TARGET is rejected for curve control.
+#cooling_hysteresis: 0.0
+#heating_hysteresis: 0.0
+#   When using control: curve, the temperature thresholds at which
+#   the fan changes speed are widened by these amounts. The fan will
+#   only step up to a higher speed once the temperature exceeds the
+#   curve point by heating_hysteresis, and step down only once the
+#   temperature falls below the curve point by cooling_hysteresis.
+#   This prevents rapid oscillation around a curve point. Defaults
+#   are 0.0 (no hysteresis).
 ```
 
 ### [fan_generic]
@@ -3463,6 +3488,11 @@ with the SET_FAN_SPEED [gcode command](G-Codes.md#fan_generic).
 #tachometer_poll_interval:
 #enable_pin:
 #   See the "fan" section for a description of the above parameters.
+#id:
+#   Optional alternate name for this fan. When set, SET_FAN_SPEED
+#   accepts FAN=<id> in addition to FAN=<section_name>. Useful for
+#   short or stable command names that do not depend on the section
+#   suffix. Unset by default.
 ```
 
 ## LEDs
