@@ -52,4 +52,12 @@ class HostResponder:
             gcmd.respond_raw("%s %s" % (prefix, msg))
 
 def load_config(config):
+    if not config.getboolean('enable_respond', True):
+        # Touch keys that HostResponder.__init__ would normally consume
+        # so the unused-option validator does not error on configs that
+        # disable respond but leave default_type / default_prefix in the
+        # [respond] section.
+        config.getchoice('default_type', respond_types, 'echo')
+        config.get('default_prefix', None)
+        return None
     return HostResponder(config)

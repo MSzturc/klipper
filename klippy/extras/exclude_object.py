@@ -301,4 +301,6 @@ class ExcludeObject:
         gcmd.respond_info('Excluded objects: {}'.format(object_list))
 
 def load_config(config):
+    if not config.getboolean('enable_exclude_object', True):
+        return None
     return ExcludeObject(config)

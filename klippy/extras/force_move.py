@@ -42,7 +42,7 @@ class ForceMove:
         self.stepper_kinematics = ffi_main.gc(
             ffi_lib.cartesian_stepper_alloc(b'x'), ffi_lib.free)
         # Register commands
-        self._enable_force_move = config.getboolean("enable_force_move", False)
+        self._enable_force_move = config.getboolean("enable_force_move", True)
         if self._enable_force_move:
             gcode = self.printer.lookup_object('gcode')
             gcode.register_command('SET_KINEMATIC_POSITION',

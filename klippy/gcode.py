@@ -117,7 +117,8 @@ class GCodeDispatch:
         self.status_commands = {}
         # Register commands needed before config file is loaded
         handlers = ['M110', 'M112', 'M115',
-                    'RESTART', 'FIRMWARE_RESTART', 'ECHO', 'STATUS', 'HELP']
+                    'RESTART', 'FIRMWARE_RESTART', 'ECHO', 'STATUS', 'HELP',
+                    'LOG_ROLLOVER']
         for cmd in handlers:
             func = getattr(self, 'cmd_' + cmd)
             desc = getattr(self, 'cmd_' + cmd + '_help', None)
@@ -385,6 +386,13 @@ class GCodeDispatch:
             if cmd in self.gcode_help:
                 cmdhelp.append("%-10s: %s" % (cmd, self.gcode_help[cmd]))
         gcmd.respond_info("\n".join(cmdhelp), log=False)
+    cmd_LOG_ROLLOVER_help = "Trigger a log file rollover"
+    def cmd_LOG_ROLLOVER(self, gcmd):
+        bglogger = self.printer.bglogger
+        if bglogger is None:
+            raise gcmd.error("Log rollover unavailable: no log file configured")
+        bglogger.manual_rollover()
+        gcmd.respond_info("Log rollover triggered")
 
 # Support reading gcode from a pseudo-tty interface
 class GCodeIO:

@@ -218,6 +218,13 @@ class ToolHead:
                                                 0.5, below=1., minval=0.)
         self.square_corner_velocity = config.getfloat(
             'square_corner_velocity', 5., minval=0.)
+        # Snapshot the configured velocity limits so RESET_VELOCITY_LIMIT
+        # can restore them after a runtime SET_VELOCITY_LIMIT / M204 has
+        # changed them.
+        self._orig_max_velocity = self.max_velocity
+        self._orig_max_accel = self.max_accel
+        self._orig_min_cruise_ratio = self.min_cruise_ratio
+        self._orig_square_corner_velocity = self.square_corner_velocity
         self.junction_deviation = self.mcr_pseudo_accel = 0.
         self._calc_junction_deviation()
         # Input stall detection
@@ -554,6 +561,10 @@ class ToolHead:
         self._calc_junction_deviation()
         return (self.max_velocity, self.max_accel,
                 self.square_corner_velocity, self.min_cruise_ratio)
+    def reset_max_velocities(self):
+        return self.set_max_velocities(
+            self._orig_max_velocity, self._orig_max_accel,
+            self._orig_square_corner_velocity, self._orig_min_cruise_ratio)
     # Temporary max_accel override used by the sensorless-homing
     # state machine when a rail declares a homing_accel. Call set_accel
     # pre-home, reset_accel post-home. set_accel snapshots the live
@@ -593,6 +604,9 @@ class ToolHeadCommandHelper:
         gcode.register_command('SET_VELOCITY_LIMIT',
                                self.cmd_SET_VELOCITY_LIMIT,
                                desc=self.cmd_SET_VELOCITY_LIMIT_help)
+        gcode.register_command('RESET_VELOCITY_LIMIT',
+                               self.cmd_RESET_VELOCITY_LIMIT,
+                               desc=self.cmd_RESET_VELOCITY_LIMIT_help)
         gcode.register_command('M204', self.cmd_M204)
     def cmd_G4(self, gcmd):
         # Dwell
@@ -619,6 +633,16 @@ class ToolHeadCommandHelper:
         if (max_velocity is None and max_accel is None
             and square_corner_velocity is None and min_cruise_ratio is None):
             gcmd.respond_info(msg, log=False)
+    cmd_RESET_VELOCITY_LIMIT_help = ("Reset printer velocity limits to the"
+                                     " values declared in printer.cfg")
+    def cmd_RESET_VELOCITY_LIMIT(self, gcmd):
+        mv, ma, scv, mcr = self.toolhead.reset_max_velocities()
+        msg = ("max_velocity: %.6f\n"
+               "max_accel: %.6f\n"
+               "minimum_cruise_ratio: %.6f\n"
+               "square_corner_velocity: %.6f" % (mv, ma, mcr, scv))
+        self.printer.set_rollover_info("toolhead", "toolhead: %s" % (msg,))
+        gcmd.respond_info(msg, log=False)
     def cmd_M204(self, gcmd):
         # Use S for accel
         accel = gcmd.get_float('S', None, above=0.)

@@ -662,6 +662,14 @@ clears any error state from the micro-controller.
 #### HELP
 `HELP`: Report the list of available extended G-Code commands.
 
+#### LOG_ROLLOVER
+`LOG_ROLLOVER`: Trigger a rotation of the klippy log file. The current
+`klippy.log` is closed and renamed with a timestamp; subsequent log
+output is written to a fresh file. Available whenever klippy is
+launched with `-l <logfile>`. See
+[Log Rotation](THEOS_Features/log_rotation.md) for the companion
+`--rotate-log-at-restart` startup flag.
+
 ### [gcode_arcs]
 
 The following standard G-Code commands are available if a

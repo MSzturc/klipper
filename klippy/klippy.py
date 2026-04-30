@@ -5,6 +5,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import sys, os, gc, optparse, logging, time, collections, importlib
+import subprocess
 import util, reactor, queuelogger, msgproto
 import gcode, configfile, pins, mcu, toolhead, webhooks
 
@@ -92,15 +93,45 @@ class Printer:
             return self.objects[section]
         module_parts = section.split()
         module_name = module_parts[0]
-        py_name = os.path.join(os.path.dirname(__file__),
-                               'extras', module_name + '.py')
-        py_dirname = os.path.join(os.path.dirname(__file__),
-                                  'extras', module_name, '__init__.py')
-        if not os.path.exists(py_name) and not os.path.exists(py_dirname):
+        klippy_dir = os.path.dirname(__file__)
+        py_name = os.path.join(klippy_dir, 'extras', module_name + '.py')
+        py_dirname = os.path.join(klippy_dir, 'extras', module_name,
+                                  '__init__.py')
+        plugin_py_name = os.path.join(klippy_dir, 'plugins',
+                                      module_name + '.py')
+        plugin_pkg_init = os.path.join(klippy_dir, 'plugins', module_name,
+                                       '__init__.py')
+        found_in_extras = (os.path.exists(py_name)
+                           or os.path.exists(py_dirname))
+        found_in_plugins = (os.path.exists(plugin_py_name)
+                            or os.path.exists(plugin_pkg_init))
+        if not found_in_extras and not found_in_plugins:
             if default is not configfile.sentinel:
                 return default
             raise self.config_error("Unable to load module '%s'" % (section,))
-        mod = importlib.import_module('extras.' + module_name)
+        if found_in_plugins:
+            # importlib.util is Python3-only; import the names lazily
+            # so that the upstream Python2 import-test in
+            # scripts/ci-build.sh (which never reaches this branch --
+            # no plugins/ entries) continues to pass on the legacy
+            # interpreter.  Use a `from`-import to avoid rebinding
+            # `importlib` to a local name and shadowing the
+            # module-level `importlib` used in the `else` branch.
+            from importlib.util import (spec_from_file_location,
+                                        module_from_spec)
+            if os.path.exists(plugin_pkg_init):
+                pkg_dir = os.path.join(klippy_dir, 'plugins', module_name)
+                mod_spec = spec_from_file_location(
+                    'extras.' + module_name, plugin_pkg_init,
+                    submodule_search_locations=[pkg_dir])
+            else:
+                mod_spec = spec_from_file_location(
+                    'extras.' + module_name, plugin_py_name)
+            mod = module_from_spec(mod_spec)
+            sys.modules['extras.' + module_name] = mod
+            mod_spec.loader.exec_module(mod)
+        else:
+            mod = importlib.import_module('extras.' + module_name)
         init_func = 'load_config'
         if len(module_parts) > 1:
             init_func = 'load_config_prefix'
@@ -121,6 +152,8 @@ class Printer:
             m.add_printer_objects(config)
         for section_config in config.get_prefix_sections(''):
             self.load_object(config, section_config.get_name(), None)
+        for autoload_section in ['force_move', 'respond', 'exclude_object']:
+            self.load_object(config, autoload_section, None)
         for m in [toolhead]:
             m.add_printer_objects(config)
         # Validate that there are no undefined parameters in the config file
@@ -250,6 +283,43 @@ def import_test():
             importlib.import_module(mname + '.' + module_name)
     sys.exit(0)
 
+RESTART_HOOK_PATH = '~/printer_data/config/scripts/before-restart-klipper.sh'
+RESTART_HOOK_TIMEOUT = 60.
+
+def _run_restart_hook():
+    # Best-effort hook executed between klippy restarts. Errors are logged
+    # but never abort the restart loop -- the MCU has already been reset
+    # by the time we reach this point, so failing to start a fresh klippy
+    # would leave the printer offline.
+    script_path = os.path.expanduser(RESTART_HOOK_PATH)
+    if not os.path.isfile(script_path):
+        return
+    try:
+        result = subprocess.run([script_path],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                check=True, text=True,
+                                timeout=RESTART_HOOK_TIMEOUT)
+        if result.stdout:
+            logging.debug("restart hook %s output:\n%s",
+                          script_path, result.stdout)
+        if result.stderr:
+            logging.warning("restart hook %s warnings:\n%s",
+                            script_path, result.stderr)
+    except subprocess.TimeoutExpired:
+        logging.error("restart hook %s timed out after %.0fs;"
+                      " continuing restart anyway",
+                      script_path, RESTART_HOOK_TIMEOUT)
+    except subprocess.CalledProcessError as e:
+        logging.error("restart hook %s failed with return code %d;"
+                      " continuing restart anyway",
+                      script_path, e.returncode)
+        if e.stderr:
+            logging.error("restart hook stderr:\n%s", e.stderr)
+    except Exception:
+        logging.exception("restart hook %s raised an unexpected error;"
+                          " continuing restart", script_path)
+
 def arg_dictionary(option, opt_str, value, parser):
     key, fname = "dictionary", value
     if '=' in value:
@@ -271,6 +341,9 @@ def main():
                     help="api server unix domain socket filename")
     opts.add_option("-l", "--logfile", dest="logfile",
                     help="write log to file instead of stderr")
+    opts.add_option("--rotate-log-at-restart", action="store_true",
+                    dest="rotate_log_at_restart",
+                    help="rotate the log file at every klippy restart")
     opts.add_option("-v", action="store_true", dest="verbose",
                     help="enable debug messages")
     opts.add_option("-o", "--debugoutput", dest="debugoutput",
@@ -303,7 +376,11 @@ def main():
     bglogger = None
     if options.logfile:
         start_args['log_file'] = options.logfile
-        bglogger = queuelogger.setup_bg_logging(options.logfile, debuglevel)
+        bglogger = queuelogger.setup_bg_logging(
+            options.logfile, debuglevel,
+            rotate_log_at_restart=options.rotate_log_at_restart)
+        if options.rotate_log_at_restart:
+            bglogger.manual_rollover()
     else:
         logging.getLogger().setLevel(debuglevel)
     logging.info("Starting Klippy...")
@@ -363,7 +440,10 @@ def main():
         main_reactor.finalize()
         main_reactor = printer = None
         logging.info("Restarting printer")
+        _run_restart_hook()
         start_args['start_reason'] = res
+        if options.rotate_log_at_restart and bglogger is not None:
+            bglogger.manual_rollover()
 
     if bglogger is not None:
         bglogger.stop()
