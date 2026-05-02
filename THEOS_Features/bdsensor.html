@@ -1445,47 +1445,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#real-time-gantry-leveling" class="md-nav__link">
-    Real-time gantry leveling
-  </a>
-  
-    <nav class="md-nav" aria-label="Real-time gantry leveling">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#configuration_1" class="md-nav__link">
-    Configuration
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#runtime-toggle" class="md-nav__link">
-    Runtime toggle
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#validation" class="md-nav__link">
-    Validation
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#when-this-wont-work" class="md-nav__link">
-    When this won't work
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#things-to-know" class="md-nav__link">
     Things to know
   </a>
@@ -1627,11 +1586,6 @@
 <td><code>G28</code></td>
 <td>The command issued by <code>BDSENSOR_CALIBRATE</code> to home the printer before measurement. Override if you use a custom homing macro.</td>
 </tr>
-<tr>
-<td><code>RT_Tilt_Probe</code></td>
-<td><code>0</code></td>
-<td>When <code>1</code>, switches <code>Z_TILT_ADJUST</code> and <code>QUAD_GANTRY_LEVEL</code> to a two-pass real-time-tracked flow. See <a href="#real-time-gantry-leveling">Real-time gantry leveling</a> below.</td>
-</tr>
 </tbody>
 </table>
 <h3 id="minimal-example">Minimal example<a class="headerlink" href="#minimal-example" title="Permanent link">&para;</a></h3>
@@ -1688,15 +1642,10 @@
 <td><code>NO_STOP_PROBE=&lt;int&gt;</code></td>
 <td><code>1</code> enables rapid-scan mode for <code>BED_MESH_CALIBRATE</code>, <code>0</code> disables it.</td>
 </tr>
-<tr>
-<td><code>RT_TILT_PROBE=&lt;int&gt;</code></td>
-<td><code>1</code> enables the two-pass real-time-tracked <code>Z_TILT_ADJUST</code> / <code>QUAD_GANTRY_LEVEL</code> flow, <code>0</code> disables it. Not persisted by <code>SAVE_CONFIG</code>.</td>
-</tr>
 </tbody>
 </table>
 <div class="highlight"><pre><span></span><code>BDSENSOR_SET Z_ADJUST=-0.05
 BDSENSOR_SET NO_STOP_PROBE=1
-BDSENSOR_SET RT_TILT_PROBE=1
 </code></pre></div>
 
 <p><code>NO_STOP_PROBE</code> takes effect immediately for the current session and is persisted via <code>SAVE_CONFIG</code>. <code>Z_ADJUST</code> is applied to the Python-side state and persisted via <code>SAVE_CONFIG</code>, but the value baked into the MCU's <code>z_offset</code> field is refreshed only on the next Klipper restart — for a runtime-effective offset change, prefer <code>Z_OFFSET_APPLY_PROBE</code> followed by <code>SAVE_CONFIG</code> and a restart.</p>
@@ -1708,51 +1657,6 @@ BDSENSOR_SET RT_TILT_PROBE=1
 <li>Run <code>PROBE_CALIBRATE</code> to set the nozzle-to-trigger Z offset (<code>z_offset</code>). Standard Klipper procedure — drop a paper, jog the nozzle to it, accept.</li>
 <li>Print a first layer at the calibrated offset and verify squish. Use <code>BDSENSOR_SET Z_ADJUST=...</code> to tune at runtime, or save a finer <code>z_offset</code> via <code>Z_OFFSET_APPLY_PROBE</code>.</li>
 </ol>
-<h2 id="real-time-gantry-leveling">Real-time gantry leveling<a class="headerlink" href="#real-time-gantry-leveling" title="Permanent link">&para;</a></h2>
-<p><code>Z_TILT_ADJUST</code> and <code>QUAD_GANTRY_LEVEL</code> traditionally probe each point with a downward <code>probing_move</code> from <code>horizontal_move_z</code>. With BDSensor that path raises <code>Probe triggered prior to movement</code> whenever the bed-to-sensor distance at the start of the probing move is already below <code>position_endstop</code> — typical when <code>horizontal_move_z</code> is small (≤ 2 mm), the bed is tilted, and a probe point lands on the high side. The trigger threshold fires before any motion, the move aborts, the leveling cycle fails.</p>
-<p><code>RT_Tilt_Probe</code> solves this by running leveling in two passes, both using the BDSensor's continuous distance readout instead of the trigger path:</p>
-<p><strong>Pass 1 — coarse, with real-time tracking.</strong></p>
-<p>The toolhead lifts to <code>position_endstop + 1 mm</code> and activates the BDSensor's real-time adjust loop. As the toolhead traverses XY between probe points, the firmware's RT loop pulses the Z steppers directly to keep the sensor-to-bed distance constant — if the bed rises, Z lifts with it; if the bed drops, Z follows down. The nozzle never approaches the bed during transit, so <code>speed: 200 mm/s</code> XY moves are safe even on heavily tilted beds. At each probe point RT is briefly disabled, Klipper's Z view is resynced to the real motor position via <code>stepper.get_mcu_position()</code>, the contactless reading is taken, and RT is re-armed for the next transit. One probing round and one correction are applied (<code>RETRIES=0</code>); the goal is to bring the bed within ±1 mm of level, not to converge fully.</p>
-<p><strong>Pass 2 — fine, fixed-height contactless probe.</strong></p>
-<p>After Pass 1 the bed deviation is small enough that a fixed <code>horizontal_move_z</code> (e.g. 1 mm) is safe. Pass 2 reuses the existing <code>QGL_Tilt_Probe = 0</code> code path: at each probe point the toolhead arrives at the configured XY at fixed Z, the BDSensor reports its distance directly (no <code>probing_move</code>, no Z motion during the measurement), and Z_TILT iterates with the user-supplied <code>RETRY_TOLERANCE</code> until convergence. <code>RETRIES</code> is hard-set to 5; <code>HORIZONTAL_MOVE_Z</code> and <code>RETRY_TOLERANCE</code> from the user's command apply to this pass.</p>
-<h3 id="configuration_1">Configuration<a class="headerlink" href="#configuration_1" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><span class="k">[BDsensor]</span>
-<span class="na">sda_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PROBE_SENSOR</span>
-<span class="na">scl_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PROBE_CONTROL</span>
-<span class="na">delay</span><span class="o">:</span><span class="w"> </span><span class="s">10</span>
-<span class="na">position_endstop</span><span class="o">:</span><span class="w"> </span><span class="s">1.5</span>
-<span class="na">RT_Tilt_Probe</span><span class="o">:</span><span class="w"> </span><span class="s">1</span>
-
-<span class="k">[z_tilt]</span>
-<span class="na">z_positions</span><span class="o">:</span>
-<span class="w">    </span><span class="na">-44, -14</span>
-<span class="w">    </span><span class="na">232, -14</span>
-<span class="w">    </span><span class="na">94, 279</span>
-<span class="na">points</span><span class="o">:</span>
-<span class="w">    </span><span class="na">10, 5</span>
-<span class="w">    </span><span class="na">160, 5</span>
-<span class="w">    </span><span class="na">85, 170</span>
-<span class="na">speed</span><span class="o">:</span><span class="w"> </span><span class="s">200</span>
-<span class="na">horizontal_move_z</span><span class="o">:</span><span class="w"> </span><span class="s">1.0</span>
-<span class="na">retry_tolerance</span><span class="o">:</span><span class="w"> </span><span class="s">0.04</span>
-<span class="na">retries</span><span class="o">:</span><span class="w"> </span><span class="s">5</span>
-</code></pre></div>
-
-<p><code>horizontal_move_z</code> and <code>retry_tolerance</code> in the <code>[z_tilt]</code> (or <code>[quad_gantry_level]</code>) section now describe Pass 2. Pass 1 derives its own height (<code>position_endstop + 1 mm</code>) and uses <code>RETRIES=0</code> regardless of the section setting.</p>
-<h3 id="runtime-toggle">Runtime toggle<a class="headerlink" href="#runtime-toggle" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code>BDSENSOR_SET RT_TILT_PROBE=1
-Z_TILT_ADJUST HORIZONTAL_MOVE_Z=1.0 RETRY_TOLERANCE=0.04
-</code></pre></div>
-
-<p>The <code>RT_TILT_PROBE</code> flag is session-only and is not written back via <code>SAVE_CONFIG</code> — set it in <code>[BDsensor]</code> if you want it persistent.</p>
-<h3 id="validation">Validation<a class="headerlink" href="#validation" title="Permanent link">&para;</a></h3>
-<p><code>RT_Tilt_Probe</code> validates <code>position_endstop + 1 ≤ 3.8</code> before any motion. Above 3.8 mm the BDSensor leaves its accurate range, so a <code>position_endstop</code> of 2.9 mm or higher raises a configuration error and aborts the leveling cycle without moving the toolhead.</p>
-<h3 id="when-this-wont-work">When this won't work<a class="headerlink" href="#when-this-wont-work" title="Permanent link">&para;</a></h3>
-<ul>
-<li><strong>Beds with deviation greater than ~1.5 mm at any probe point relative to the homing reference.</strong> Pass 1's RT tracking range tops out at the BDSensor's 3.8 mm sensing window minus the <code>pass1_height</code> headroom; sustained deviation outside that range during transit halts RT and the next probe-point read raises <code>Bed Distance Sensor, out of range</code>. Pre-level mechanically in this case, then re-enable.</li>
-<li><strong>Multi-MCU printers where Z motors are split across boards.</strong> The RT loop addresses one stepper OID at a time on the MCU that owns the BDSensor. Z motors on a different MCU don't receive RT pulses and fall behind. <code>RT_Tilt_Probe</code> is currently single-MCU only.</li>
-<li><strong>Belts that allow the gantry to rotate around an axis the Z motors can't correct.</strong> RT moves all Z motors synchronously during transit; it does not redistribute correction across motors. Z_TILT itself handles that during the per-point measurement, but if the transit path crosses a region where the gantry physically can't follow the bed (e.g. one motor is mechanically stuck), RT will detect out-of-range and abort.</li>
-</ul>
 <h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
 <ul>
 <li><strong>The sensor needs the firmware-side companion.</strong> <code>BD_sensor.c</code> is built into every MCU image automatically (<code>src-y += BD_sensor.c</code> in <code>src/Makefile</code>). If you're cross-compiling against an older fork checkout, make sure the file is present and the build picks it up.</li>
