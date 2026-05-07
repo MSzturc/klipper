@@ -270,8 +270,15 @@ The following information is available for heater objects such as
   the given heater.
 - `power`: The last setting of the PWM pin (a value between 0.0 and
   1.0) associated with the heater.
+- `pid_profile`: Name of the currently loaded PID profile.
 - `can_extrude`: If extruder can extrude (defined by `min_extrude_temp`),
   available only for [extruder](Config_Reference.md#extruder)
+- `control_stats`: Algorithm-specific runtime state. Only present when
+  the heater's control algorithm exposes one. For `control: mpc` it
+  reports `temp_block`, `temp_sensor`, `temp_ambient` (the three
+  internal model states), `power` (modelled heater power in W),
+  `loss_ambient` and `loss_filament` (modelled heat losses in W),
+  and `filament_temp` (the configured filament-temperature source).
 
 ## heaters
 

@@ -1,0 +1,26 @@
+# MPC heater config validation
+DICTIONARY atmega2560.dict
+CONFIG mpc_heater.cfg
+
+# Extrude only
+G1 E5
+G1 E-2
+G1 E7
+
+# Home and extrusion moves
+G28
+G1 X20 Y20 Z1
+G1 X25 Y25 E7.5
+
+# Heat extruder and bed via MPC controllers
+M104 S200
+M140 S60
+M109 S205
+M190 S65
+
+# Live tuning of model parameters
+MPC_SET HEATER=extruder FILAMENT_HEAT_CAPACITY=2.0 FILAMENT_TEMP=ambient
+
+# Cool down
+M104 S0
+M140 S0

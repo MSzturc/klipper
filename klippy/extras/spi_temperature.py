@@ -22,6 +22,7 @@ class SensorBase:
         self._callback = None
         self.min_sample_value = self.max_sample_value = 0
         self._report_clock = 0
+        self._is_connected = False
         self.spi = bus.MCU_SPI_from_config(
             config, spi_mode, pin_option="sensor_pin", default_speed=4000000)
         if config_cmd is not None:
@@ -33,6 +34,10 @@ class SensorBase:
             self._handle_spi_response,
             "thermocouple_result oid=%c next_clock=%u value=%u fault=%c", oid)
         mcu.register_config_callback(self._build_config)
+        self.printer.register_event_handler("klippy:connect",
+                                            self._handle_connect)
+    def _handle_connect(self):
+        self._is_connected = True
     def setup_minmax(self, min_temp, max_temp):
         adc_range = [self.calc_adc(min_temp), self.calc_adc(max_temp)]
         self.min_sample_value = min(adc_range)
@@ -54,6 +59,11 @@ class SensorBase:
                 self.min_sample_value, self.max_sample_value,
                 MAX_INVALID_COUNT), is_init=True)
     def _handle_spi_response(self, params):
+        # Samples that arrive before connect completes can hit
+        # mcu.clock_to_print_time() before the secondary clock has been
+        # synced; ignore them.
+        if not self._is_connected:
+            return
         if params['fault']:
             self.handle_fault(params['value'], params['fault'])
             return

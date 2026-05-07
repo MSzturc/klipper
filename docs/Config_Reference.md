@@ -1016,8 +1016,12 @@ sensor_pin:
 #   be smoothed to reduce the impact of measurement noise. The default
 #   is 1 seconds.
 control:
-#   Control algorithm (either pid or watermark). This parameter must
-#   be provided.
+#   Control algorithm (either pid, pid_v, dual_loop_pid, mpc or
+#   watermark). This parameter must be provided. pid_v should only be
+#   used on well calibrated heaters with low to moderate noise. mpc
+#   uses a model-predictive controller and is intended for hotends and
+#   beds where a simulation-driven feedforward improves disturbance
+#   rejection (filament cooling, fan speed changes).
 pid_Kp:
 pid_Ki:
 pid_Kd:
@@ -1030,6 +1034,83 @@ pid_Kd:
 #   off and 1.0 being full on. Consider using the PID_CALIBRATE
 #   command to obtain these parameters. The pid_Kp, pid_Ki, and pid_Kd
 #   parameters must be provided for PID heaters.
+#inner_sensor_name:
+#   For control: dual_loop_pid - the name of a [temperature_sensor]
+#   section that monitors the heating element. The inner loop will
+#   regulate this sensor while the outer loop tracks the surface
+#   sensor configured above. Required for dual_loop_pid.
+#inner_max_temp:
+#   For control: dual_loop_pid - the maximum temperature (in Celsius)
+#   that the inner sensor is allowed to reach. The inner loop targets
+#   this value as its setpoint, capping heater power. Required for
+#   dual_loop_pid.
+#inner_pid_Kp:
+#inner_pid_Ki:
+#inner_pid_Kd:
+#   For control: dual_loop_pid - PID coefficients for the inner
+#   (secondary) loop that regulates the heating element. The outer
+#   pid_Kp/Ki/Kd run the surface loop; the inner gains run the
+#   element-temperature loop. The heater pwm is the lower of the two
+#   loop outputs, so the inner cap is always honoured.
+#
+#   If control: mpc
+#heater_power:
+#   Maximum continuous power output of the heating element in Watts.
+#   Required for control: mpc. Used as the upper bound when the model
+#   solves for required heater power.
+#block_heat_capacity:
+#ambient_transfer:
+#sensor_responsiveness:
+#   The three measured constants of the heater model (block thermal
+#   capacity in J/K, block-to-ambient transfer coefficient in W/K, and
+#   sensor responsiveness in 1/s). Run MPC_CALIBRATE to populate these
+#   automatically; they may also be edited at runtime via MPC_SET.
+#fan_ambient_transfer:
+#   Comma-separated list of ambient-transfer values measured at evenly
+#   spaced cooling-fan duty cycles (lowest to highest). MPC_CALIBRATE
+#   produces this list when a cooling_fan is configured. Empty by
+#   default; if empty the controller falls back to a single
+#   ambient_transfer value regardless of fan speed.
+#cooling_fan:
+#   Optional reference to a [fan_generic <name>] section. When set, the
+#   controller modulates ambient_transfer by the fan's commanded speed
+#   using fan_ambient_transfer as the lookup table. Hotend MPC heaters
+#   typically point this at the part-cooling fan.
+#ambient_temp_sensor:
+#   Optional reference to a [temperature_sensor <name>] used to seed
+#   and track the ambient model state. If unset, ambient is estimated
+#   from temperature observations during operation.
+#filament_diameter: 1.75
+#filament_density: 1.2
+#filament_heat_capacity: 0.0
+#   Filament constants used for the extrusion-cooling feedforward.
+#   filament_diameter and filament_density default to 1.75 mm and
+#   1.2 g/cm^3 (generic PLA). filament_heat_capacity is in J/(g*K)
+#   and defaults to 0, which disables the feedforward — set it to a
+#   filament-appropriate value (around 1.8 for PLA) to enable.
+#filament_temperature_source: ambient
+#   Source for the filament temperature used in the cooling
+#   feedforward. Either 'ambient' (use the modelled ambient state),
+#   'sensor' (read from ambient_temp_sensor; requires that section),
+#   or a fixed numeric value in Celsius.
+#maximum_retract: 2.0
+#   Maximum filament retraction in mm that the feedforward will
+#   compensate for. Larger reported retractions are clamped to this
+#   value to keep the model stable.
+#target_reach_time: 2.0
+#   Time horizon (in seconds) over which the controller plans to drive
+#   the block to the target temperature. Smaller values produce more
+#   aggressive transients.
+#smoothing: 0.83
+#   Per-second exponential smoothing factor for state correction from
+#   sensor observations. Closer to 1.0 corrects faster but tracks
+#   sensor noise more closely.
+#min_ambient_change: 1.0
+#   Minimum ambient-state correction rate, in K per second of dT.
+#   Avoids the ambient estimate stalling when adjustment_dT is small.
+#steady_state_rate: 0.5
+#   Threshold (in K/s) below which the controller considers the system
+#   to be steady-state and applies the ambient-tracking correction.
 #max_delta: 2.0
 #   On 'watermark' controlled heaters this is the number of degrees in
 #   Celsius above the target temperature before disabling the heater
@@ -3226,6 +3307,53 @@ sensor_type: temperature_combined
 #maximum_deviation:
 #   Must be provided. Maximum permissible deviation between the sensors
 #   to combine (e.g. 5 degrees). To disable it, use a large value (e.g. 999.9)
+```
+
+### MPC ambient temperature sensor
+
+Virtual sensor that reports the internal ambient-temperature state of an
+MPC-controlled heater. When the bound heater is running any other
+control algorithm, the sensor reports a fixed ambient default (25 °C).
+Useful for exposing the modelled ambient on a front-end status panel
+or for triggering macros from `temperature_wait`-style flows.
+
+```
+sensor_type: mpc_ambient_temperature
+heater_name: extruder
+#   Heater whose MPC ambient state should be exposed. Required.
+#gcode_id: AT
+#   Optional g-code identifier reported via M105.
+min_temp: 0
+max_temp: 325
+#ignore_limits: False
+#   When True, sensor values outside min_temp/max_temp do not trigger
+#   a printer shutdown.
+#echo_limits_to_console: False
+#   When True and ignore_limits is True, range violations are echoed
+#   to the gcode console instead of being silently swallowed.
+```
+
+### MPC block temperature sensor
+
+Virtual sensor that reports the internal block-temperature state of an
+MPC-controlled heater. When the bound heater is running any other
+control algorithm, the sensor falls back to the heater's smoothed
+sensor reading.
+
+```
+sensor_type: mpc_block_temperature
+heater_name: extruder
+#   Heater whose MPC block state should be exposed. Required.
+#gcode_id: BE
+#   Optional g-code identifier reported via M105.
+min_temp: 0
+max_temp: 325
+#ignore_limits: False
+#   When True, sensor values outside min_temp/max_temp do not trigger
+#   a printer shutdown.
+#echo_limits_to_console: False
+#   When True and ignore_limits is True, range violations are echoed
+#   to the gcode console instead of being silently swallowed.
 ```
 
 ## Fans

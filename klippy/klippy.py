@@ -23,9 +23,13 @@ command to reload the config and restart the host software.
 Printer is halted
 """
 
+class WaitInterruption(gcode.CommandError):
+    pass
+
 class Printer:
     config_error = configfile.error
     command_error = gcode.CommandError
+    wait_interrupted = WaitInterruption
     def __init__(self, main_reactor, bglogger, start_args):
         self.bglogger = bglogger
         self.start_args = start_args
@@ -234,6 +238,19 @@ class Printer:
             logging.info(info)
         if self.bglogger is not None:
             self.bglogger.set_rollover_info(name, info)
+    def wait_while(self, condition_cb, error_on_cancel=True, interval=1.):
+        # Block the current command until condition_cb returns False or the
+        # printer enters shutdown. interval controls reactor pause length.
+        # When error_on_cancel is True, a shutdown raises WaitInterruption so
+        # the calling command aborts with a clear error rather than silently
+        # returning to its caller.
+        eventtime = self.reactor.monotonic()
+        while condition_cb(eventtime):
+            if self.in_shutdown_state:
+                if error_on_cancel:
+                    raise WaitInterruption("Command interrupted")
+                return
+            eventtime = self.reactor.pause(eventtime + interval)
     def invoke_shutdown(self, msg, details={}):
         if self.in_shutdown_state:
             return

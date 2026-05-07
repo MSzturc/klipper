@@ -25,6 +25,7 @@ Klipper supports the following standard G-Code commands:
 - Set extruder temperature and wait: `M109 [T<index>] S<temperature>`
   - Note: M109 always waits for temperature to settle at requested
     value
+- Enable cold extrusion: `M302 [T<index>] [P<enable>] [S<min_extrude_temp>]`
 - Set bed temperature: `M140 [S<temperature>]`
 - Set bed temperature and wait: `M190 S<temperature>`
   - Note: M190 always waits for temperature to settle at requested
@@ -833,6 +834,23 @@ above the supplied MINIMUM and/or at or below the supplied MAXIMUM.
 [TARGET=<target_temperature>]`: Sets the target temperature for a
 heater. If a target temperature is not supplied, the target is 0.
 
+#### COLD_EXTRUDE
+`COLD_EXTRUDE HEATER=<heater_name> [ENABLE=<0|1>]
+[MIN_EXTRUDE_TEMP=<min_extrude_temp>]`: Enables or disables cold
+extrusion on the specified heater. When `ENABLE=1`, the extruder
+moves are permitted regardless of temperature; when `ENABLE=0`, the
+configured `min_extrude_temp` is enforced. If `MIN_EXTRUDE_TEMP` is
+supplied, the threshold is updated for the current session and a
+`SAVE_CONFIG` will persist it. With no parameters, the current state
+is reported.
+
+#### SET_SMOOTH_TIME
+`SET_SMOOTH_TIME HEATER=<heater_name> [SMOOTH_TIME=<smooth_time>]
+[SAVE_TO_PROFILE=0|1]`: Sets the `smooth_time` of the specified heater.
+If `SMOOTH_TIME` is omitted, the value is reset to the configured one.
+If `SAVE_TO_PROFILE` is set to `1`, the new value is written to the
+currently loaded PID profile.
+
 ### [idle_timeout]
 
 The idle_timeout module is automatically loaded.
@@ -1167,12 +1185,68 @@ in the config file.
 
 #### PID_CALIBRATE
 `PID_CALIBRATE HEATER=<config_name> TARGET=<temperature>
-[WRITE_FILE=1]`: Perform a PID calibration test. The specified heater
-will be enabled until the specified target temperature is reached, and
-then the heater will be turned off and on for several cycles. If the
-WRITE_FILE parameter is enabled, then the file /tmp/heattest.txt will
-be created with a log of all temperature samples taken during the
-test.
+[WRITE_FILE=1] [TOLERANCE=0.02] [PROFILE=<profile_name>]`: Perform a PID
+calibration test. The specified heater will be enabled until the
+specified target temperature is reached, and then the heater will be
+turned off and on for several cycles. If the WRITE_FILE parameter is
+enabled, then the file /tmp/heattest.csv will be created with a log of
+all temperature samples taken during the test. TOLERANCE defaults to
+0.02 if not passed in. The tighter the tolerance the better the
+calibration result will be, but how tight you can achieve depends on
+how clean your sensor readings are. Low noise readings might allow 0.01
+to be used, while noisy readings might require a value of 0.03 or
+higher. PROFILE selects the PID profile slot the result is stored in;
+the default `default` writes the values back to the heater's config
+section, while any other name creates or updates a `[pid_profile
+<heater_name> <profile>]` section. The change becomes permanent after
+`SAVE_CONFIG`.
+
+#### SET_HEATER_PID
+`SET_HEATER_PID HEATER=<heater_name> [KP=<kp>] [KI=<ki>] [KD=<kd>]`:
+Updates the PID coefficients of the named heater at runtime without
+requiring a configuration reload. The heater must use the `pid` or
+`pid_v` control algorithm. Any of KP/KI/KD that are omitted are left
+unchanged. `HEATER` takes the short name (so for `heater_generic chamber`
+write `chamber`).
+
+### [pid_profile]
+
+The `pid_profile` module is automatically loaded if a heater is defined
+in the config file. `HEATER` takes the short name (so for
+`heater_generic chamber` write `chamber`).
+
+#### PID_PROFILE
+`PID_PROFILE LOAD=<profile_name> HEATER=<heater_name> [DEFAULT=<profile_name>]
+[VERBOSE=<verbosity>] [KEEP_TARGET=0|1] [LOAD_CLEAN=0|1]`:
+Loads the named PID profile for the specified heater. If `DEFAULT` is
+specified, that profile is loaded when the requested `LOAD` profile is
+not found. `VERBOSE` controls console output: `low` prints minimal info,
+`high` prints all profile parameters, any other value suppresses output.
+If `KEEP_TARGET` is `1`, the heater retains its current target
+temperature; if `0` (the default), the target is reset to `0` so the
+algorithm has time to settle. If `LOAD_CLEAN` is `1`, the profile is
+loaded as if the printer just started up; if `0` (the default), the
+profile retains previous heating state to reduce overshoot — set this
+to `1` only if profile switching produces erratic behaviour.
+
+`PID_PROFILE SAVE=<profile_name> HEATER=<heater_name>`: Saves the
+currently loaded profile of the specified heater to the config under the
+given name. The change becomes permanent after `SAVE_CONFIG`.
+
+`PID_PROFILE REMOVE=<profile_name> HEATER=<heater_name>`: Removes the
+named profile from the in-memory profile list. The removal becomes
+permanent after `SAVE_CONFIG`.
+
+`PID_PROFILE SET_VALUES=<profile_name> HEATER=<heater_name>
+TARGET=<target_temp> TOLERANCE=<tolerance> CONTROL=<control_type>
+KP=<kp> KI=<ki> KD=<kd> [KEEP_TARGET=0|1] [LOAD_CLEAN=0|1]`: Creates a
+new profile with the supplied PID values and immediately loads it.
+`CONTROL` must be `pid` or `pid_v`. `TARGET` and `TOLERANCE` must be
+specified to form a valid profile. `KEEP_TARGET` and `LOAD_CLEAN` behave
+as described under `LOAD`.
+
+`PID_PROFILE GET_VALUES=<profile_name> HEATER=<heater_name>`: Prints the
+parameters of the named profile to the console.
 
 ### [print_stats]
 
