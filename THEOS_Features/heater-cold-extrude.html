@@ -13,7 +13,7 @@
     
     
       
-        <title>THEOS Klipper Fork - Klipper documentation</title>
+        <title>Cold Extrude - Klipper documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#theos-klipper-fork" class="md-skip">
+        <a href="#cold-extrude" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              THEOS Klipper Fork
+              Cold Extrude
             
           </span>
         </div>
@@ -1342,8 +1342,56 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#fork-specific-features" class="md-nav__link">
-    Fork-specific features
+  <a href="#what-this-is" class="md-nav__link">
+    What this is
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-this" class="md-nav__link">
+    When to use this
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#g-code-commands" class="md-nav__link">
+    G-code commands
+  </a>
+  
+    <nav class="md-nav" aria-label="G-code commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#m302-marlin-compatible" class="md-nav__link">
+    M302 (Marlin-compatible)
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cold_extrude" class="md-nav__link">
+    COLD_EXTRUDE
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-to-know" class="md-nav__link">
+    Things to know
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#credits" class="md-nav__link">
+    Credits
   </a>
   
 </li>
@@ -1360,38 +1408,141 @@
             <article class="md-content__inner md-typeset">
               
                 
-<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/README.md" title="Edit this page" class="md-content__button md-icon">
+<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/heater-cold-extrude.md" title="Edit this page" class="md-content__button md-icon">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z"/></svg>
 </a>
 
 
-<h1 id="theos-klipper-fork">THEOS Klipper Fork<a class="headerlink" href="#theos-klipper-fork" title="Permanent link">&para;</a></h1>
-<p>A fork of <a href="https://www.klipper3d.org/">Klipper</a> maintained by Matt The Printing Nerd, bundling additional features used by the <a href="https://github.com/MSzturc/THEOS">THEOS</a> printer operating system on top of stock Klipper.</p>
-<p>The core Klipper experience is unchanged: if you already run Klipper, everything you know still applies. Stock documentation at <a href="https://www.klipper3d.org/">klipper3d.org</a> remains authoritative for installation, kinematics, tuning, and everything not listed below.</p>
-<h2 id="fork-specific-features">Fork-specific features<a class="headerlink" href="#fork-specific-features" title="Permanent link">&para;</a></h2>
+<h1 id="cold-extrude">Cold Extrude<a class="headerlink" href="#cold-extrude" title="Permanent link">&para;</a></h1>
+<h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
+<p>Klipper refuses to extrude when the hotend is below <code>min_extrude_temp</code>
+(default 170 °C). That interlock prevents jammed feeders and cold
+filament damaging the gears, but there are situations where you
+genuinely want a cold extrude move: loading filament from cold,
+clearing a heatbreak with a hot pull, debugging the extruder kinematics
+without wasting a heat-up cycle.</p>
+<p>This fork adds two ways to override the interlock at runtime — without
+restarting Klipper, without editing your config, and without losing the
+safety net the next time you actually want it:</p>
+<ol>
+<li><strong><code>M302</code></strong> — the Marlin-compatible cold-extrude command, so existing
+   slicer macros and host scripts that emit M302 do the right thing on
+   Klipper too.</li>
+<li><strong><code>COLD_EXTRUDE</code></strong> — a Klipper-native multiplex command that targets
+   any heater (extruder, generic) by short name and reports the current
+   state when called with no parameters.</li>
+</ol>
+<p>Both commands can also adjust the heater's <code>min_extrude_temp</code> for the
+session and write the new value to disk via <code>SAVE_CONFIG</code>.</p>
+<h2 id="when-to-use-this">When to use this<a class="headerlink" href="#when-to-use-this" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="sensorless_homing.html"><strong>Sensorless Homing</strong></a> — StallGuard-based homing with per-rail <code>home_current</code>, <code>min_home_dist</code>, and <code>homing_accel</code>; guaranteed post-home current restore; multi-stepper-per-rail current swap. Based on work by Brandon Nance, Bea Nance, Rogerio Goncalves, and Zeanon on Kalico, re-derived on the current Klipper base.</li>
-<li><a href="reset_velocity_limit.html"><strong><code>RESET_VELOCITY_LIMIT</code> G-code</strong></a> — restores <code>max_velocity</code>, <code>max_accel</code>, <code>square_corner_velocity</code>, and <code>minimum_cruise_ratio</code> to their configured values in one call, undoing any runtime <code>SET_VELOCITY_LIMIT</code> / <code>M204</code> override. Based on Kalico PR #472 by Matt Szturc.</li>
-<li><a href="tmc_drivers.html"><strong>TMC Drivers</strong></a> — motor-data-driven autotuning of chopper/PWM/hysteresis/StallGuard/CoolStep, per-stepper low-noise homing profile, TMC5160 driver_cs and short_conf, TMC2240 driver_cs / current_range / mandatory rref, mandatory sense_resistor, stepstick lookup table. Combines Klipper3d PR #6644 (Honest Brothers), Kalico PRs #382/#444/#525/#556/#613, and original autotuning work.</li>
-<li><a href="configparser_extensions.html"><strong>ConfigParser Extensions</strong></a> — variable interpolation (<code>${section.option}</code>), arithmetic evaluation with <code>min</code>/<code>max</code>/<code>abs</code>/<code>round</code>, default values (<code>:default</code>, <code>:None</code>), printer.cfg-overrides-sub-configs semantics, conditional includes, variable references in <code>[include]</code> paths, recursive subfolder globs, escape syntax (<code>\${literal}</code>), and the <code>RELOAD_GCODE_MACROS</code> G-code. Based on Kalico PRs #448/#482/#753 by Frank Tackitt and original work by Matt Szturc.</li>
-<li><a href="fan_control.html"><strong>Fan Control</strong></a> — <code>min_power</code> duty floor and <code>power</code> status key for actual PWM duty; <code>initial_speed</code> for at-startup fan command; <code>control: curve</code> for <code>[temperature_fan]</code> with point-list interpolation and heating/cooling hysteresis; optional short <code>id:</code> alias for <code>SET_FAN_SPEED</code> on <code>[fan_generic]</code>; hardware-PWM shutdown handling and kick-start last-value reset. Based on Kalico PRs #44/#193/#433/#436/#466/#819 by Kubaracek, Zeanon, Frédéric Beaucamp, NokkOnEffect, and Rogerio Goncalves, plus original work by Matt Szturc.</li>
-<li><a href="heater-pid-autotune.html"><strong>PID Autotune (Adaptive Relay)</strong></a> — <code>PID_CALIBRATE</code> rewritten on the Taysom &amp; Sorensen iterative method with amplitude-based convergence and a verification heat-up; better suited to high-thermal-mass beds and chamber heaters than the stock single-cycle Åström-Hägglund tune. Based on Kalico PR #62 by Dan Sorensen.</li>
-<li><a href="heater-pid-velocity.html"><strong>Velocity-Form PID</strong></a> — <code>control: pid_v</code> selects a velocity-form PID alternative to the positional controller, with <code>SET_HEATER_PID</code> for runtime Kp/Ki/Kd retuning on either algorithm. Based on Kalico PR #47 by Dans98 and PRs #35/#98 for the <code>SET_HEATER_PID</code> command.</li>
-<li><a href="heater-pid-profiles.html"><strong>PID Profiles</strong></a> — per-heater named profiles for PID/PID-velocity/dual-loop gains and <code>smooth_time</code>, with <code>PID_PROFILE LOAD/SAVE/REMOVE</code>, profile-aware <code>PID_CALIBRATE</code>, and <code>SET_SMOOTH_TIME</code>. Based on Kalico PR #162 by Vladimir Vukicevic with follow-up fixes by Tomas Petrlik.</li>
-<li><a href="heater-dual-loop-pid.html"><strong>Dual-Loop PID</strong></a> — <code>control: dual_loop_pid</code> cascades an outer (load) loop into an inner (element) loop with a hard <code>inner_max_temp</code> ceiling, two-pass calibration via <code>PID_CALIBRATE</code>. Based on Kalico PR #735 by Zeanon with follow-up fixes in PRs #758 / #809.</li>
-<li><a href="heater-mpc.html"><strong>Model Predictive Control (MPC)</strong></a> — <code>control: mpc</code> model-predictive heater controller with <code>MPC_CALIBRATE</code> and live <code>MPC_SET</code> tuning, fan-tracking via <code>fan_ambient_transfer</code> breakpoints, filament-cooling load with <code>filament_diameter</code>/<code>density</code>/<code>heat_capacity</code>, virtual <code>mpc_block_temperature</code> and <code>mpc_ambient_temperature</code> sensors. Based on Lasse Dalegaard's Klipper-MPC implementation with calibration, live-tuning, and virtual-sensor extensions from Kalico PRs #447/#468/#517/#555/#708/#732/#775/#819.</li>
-<li><a href="heater-cold-extrude.html"><strong>Cold Extrude</strong></a> — Marlin-compatible <code>M302</code> and Klipper-native <code>COLD_EXTRUDE</code> for runtime override of <code>min_extrude_temp</code>, with a session-only enable flag and a persisted threshold update. Based on Kalico PR #750 by Zeanon, with the dual-sensor heater follow-up in PR #766.</li>
-<li><a href="heater-diagnostics.html"><strong>Heater Diagnostics</strong></a> — ADC out-of-range shutdowns now name the offending heater and report its <code>last_temp</code> against the configured <code>min_temp</code>/<code>max_temp</code>; <code>PrinterHeaters.lookup_heater</code> accepts the full section name as shorthand. Based on Kalico PRs #182 and #252 by Rogerio Goncalves.</li>
-<li><a href="bdsensor.html"><strong>BDSensor</strong></a> — in-tree integration of the contactless inductive bed-distance probe; <code>[BDsensor]</code> config section, <code>BDSENSOR_*</code> G-code commands, automatic firmware build (<code>src-y += BD_sensor.c</code>), and <code>[board_pins]</code> alias resolution on <code>sda_pin</code> / <code>scl_pin</code> / <code>endstop_pin</code>. Based on work by Mark Yue, integrated from upstream <code>new</code> branch HEAD <code>8d0f833</code>.</li>
-<li><a href="use_probe_xy_offsets.html"><strong><code>use_probe_xy_offsets</code> Config Key</strong></a> — explicit per-section override for whether <code>ProbePointsHelper</code>-based probing applies the probe's X/Y offsets, exposed on <code>[bed_mesh]</code>, <code>[bed_tilt]</code>, <code>[z_tilt]</code>, <code>[quad_gantry_level]</code>, <code>[delta_calibrate]</code>, and <code>[screws_tilt_adjust]</code>. Based on Kalico PR #500 by Rogerio Goncalves.</li>
-<li><a href="plugin_system.html"><strong>Plugin System</strong></a> — load extras from <code>klippy/plugins/</code> without marking the install dirty; supports both single-file and package-style plugins. Based on Kalico PRs #82 and #100 by Brandon Nance, with package-directory support by Uku.</li>
-<li><a href="log_rotation.html"><strong>Log Rotation</strong></a> — <code>--rotate-log-at-restart</code> startup flag and <code>LOG_ROLLOVER</code> G-code for explicit log rollover, alongside upstream's midnight rotation. Based on Kalico PRs #181 and #498 by Rogerio Goncalves.</li>
-<li><a href="gcode_shell_command.html"><strong>gcode_shell_command</strong></a> — <code>[gcode_shell_command &lt;name&gt;]</code> config sections expose configured shell commands as <code>RUN_SHELL_COMMAND CMD=&lt;name&gt;</code> G-code with timeouts, parameter passthrough, and streamed output. Based on Eric Callahan's original extension, brought into Kalico via PRs #71 and #777 by Rogerio Goncalves and Clifford.</li>
-<li><a href="autoload_modules.html"><strong>Autoload Modules</strong></a> — <code>[force_move]</code>, <code>[respond]</code>, and <code>[exclude_object]</code> are loaded by default with <code>enable_&lt;name&gt;</code> opt-out keys, removing common boilerplate from <code>printer.cfg</code>. Based on Kalico PRs #135 and #306 by Rogerio Goncalves and the respond-default change.</li>
-<li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
-<li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
-<li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
+<li>Loading filament for the first time on a brand-new printer where you
+  haven't run a hotend heat yet.</li>
+<li>Clearing a clogged heatbreak with a cold pull (heat to the right
+  point, then pull while still warm but below normal extrude temp).</li>
+<li>Debugging a stepper or drive-train issue where you want extruder
+  steps without warming up the hotend.</li>
+<li>Switching an active job temporarily into a cold-extrude mode (some
+  filament-load macros do this in their last step) and switching back
+  cleanly afterwards.</li>
 </ul>
+<p>You don't need this for normal printing. The default
+<code>min_extrude_temp: 170</code> interlock is on for a reason.</p>
+<h2 id="g-code-commands">G-code commands<a class="headerlink" href="#g-code-commands" title="Permanent link">&para;</a></h2>
+<h3 id="m302-marlin-compatible"><code>M302</code> (Marlin-compatible)<a class="headerlink" href="#m302-marlin-compatible" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>T&lt;index&gt;</code></td>
+<td>Optional extruder index (<code>T0</code> is the primary <code>[extruder]</code>, <code>T1</code> is <code>[extruder1]</code>, etc.). Without <code>T</code>, the active extruder is used.</td>
+</tr>
+<tr>
+<td><code>P&lt;0\|1&gt;</code></td>
+<td>Enable cold extrusion: <code>P1</code> allows extrusion at any temperature, <code>P0</code> re-enables the <code>min_extrude_temp</code> interlock.</td>
+</tr>
+<tr>
+<td><code>S&lt;temp&gt;</code></td>
+<td>Set the heater's <code>min_extrude_temp</code> to <code>&lt;temp&gt;</code> °C for the current session. Persisted on the next <code>SAVE_CONFIG</code>.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>M302 P1            ; allow cold extrusion on the active extruder
+M302 P0            ; re-enable the safety interlock
+M302 S170          ; set the threshold to 170 °C, leave enable state as set
+M302 P1 S0         ; allow cold extrusion and lower the threshold to 0 °C
+M302 T1 P1         ; allow cold extrusion on the second extruder only
+</code></pre></div>
+
+<p>With no parameters, <code>M302</code> is a no-op (the parameter parsing requires
+at least one of <code>T</code>/<code>P</code>/<code>S</code> to do anything). Use <code>COLD_EXTRUDE</code> (below)
+if you want to query the current state.</p>
+<h3 id="cold_extrude"><code>COLD_EXTRUDE</code><a class="headerlink" href="#cold_extrude" title="Permanent link">&para;</a></h3>
+<p>Klipper-native form. Targets any heater — not just extruders — and
+prints the current state when called with no parameters.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HEATER</code></td>
+<td>Short name of the heater (e.g. <code>extruder</code>, <code>extruder1</code>, <code>heater_generic chamber</code>).</td>
+</tr>
+<tr>
+<td><code>ENABLE</code></td>
+<td><code>1</code> to allow extrusion at any temperature, <code>0</code> to re-enable the interlock. Optional.</td>
+</tr>
+<tr>
+<td><code>MIN_EXTRUDE_TEMP</code></td>
+<td>Set the heater's <code>min_extrude_temp</code> to this value in °C, for the session. Persisted on the next <code>SAVE_CONFIG</code>. Optional.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>COLD_EXTRUDE HEATER=extruder ENABLE=1
+COLD_EXTRUDE HEATER=extruder MIN_EXTRUDE_TEMP=180
+COLD_EXTRUDE HEATER=extruder            ; report current state
+</code></pre></div>
+
+<h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Setting only <code>MIN_EXTRUDE_TEMP</code> clears the cold-extrude flag.</strong> Both
+  <code>M302 S&lt;temp&gt;</code> (without <code>P</code>) and <code>COLD_EXTRUDE MIN_EXTRUDE_TEMP=…</code>
+  (without <code>ENABLE</code>) reset <code>cold_extrude</code> to <code>0</code> as a side effect. This
+  matches Marlin's M302 semantics; if you want to keep cold-extrude
+  enabled while also adjusting the threshold, pass both <code>P1</code> (or
+  <code>ENABLE=1</code>) and <code>S</code> (or <code>MIN_EXTRUDE_TEMP</code>) in the same call.</li>
+<li><strong><code>SAVE_CONFIG</code> only persists the <code>MIN_EXTRUDE_TEMP</code> change.</strong> The
+  <code>cold_extrude</code> flag itself is intentionally a runtime-only setting —
+  there is no <code>cold_extrude</code> config key and a printer restart always
+  re-enables the interlock. Don't expect <code>M302 P1</code> to survive a
+  <code>FIRMWARE_RESTART</code>.</li>
+<li><strong>Threshold parameters are bounded by the heater's <code>min_temp</code>/
+  <code>max_temp</code>.</strong> <code>M302 S&lt;temp&gt;</code> and <code>COLD_EXTRUDE MIN_EXTRUDE_TEMP=…</code>
+  reject values outside the heater's configured temperature range. The
+  bounds are enforced by gcmd parameter validation.</li>
+<li><strong>Dual-loop heaters honour cold-extrude too.</strong> A hotend running
+  <code>control: dual_loop_pid</code> reads <code>cold_extrude</code> against the smoothed
+  primary (load) sensor temperature in exactly the same way as a
+  single-sensor heater.</li>
+<li><strong>There is no per-extruder default cold-extrude config key.</strong> If you
+  routinely run a printer without the interlock (e.g. a paste
+  extruder), set <code>min_extrude_temp: 0</code> in the heater section. The
+  runtime override is for occasional use, not for permanent disabling.</li>
+</ul>
+<h2 id="credits">Credits<a class="headerlink" href="#credits" title="Permanent link">&para;</a></h2>
+<p>Based on the M302 / COLD_EXTRUDE implementation from the Kalico
+community (Zeanon, KalicoCrew PR #750), with the dual-sensor heater
+follow-up (KalicoCrew PR #766) folded into the same change.
+Re-derived against the current Klipper extruder and heater layout.</p>
 
               
             </article>

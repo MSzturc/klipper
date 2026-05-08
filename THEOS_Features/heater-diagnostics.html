@@ -13,7 +13,7 @@
     
     
       
-        <title>THEOS Klipper Fork - Klipper documentation</title>
+        <title>Heater Diagnostics - Klipper documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#theos-klipper-fork" class="md-skip">
+        <a href="#heater-diagnostics" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              THEOS Klipper Fork
+              Heater Diagnostics
             
           </span>
         </div>
@@ -1342,8 +1342,29 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#fork-specific-features" class="md-nav__link">
-    Fork-specific features
+  <a href="#what-this-is" class="md-nav__link">
+    What this is
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-this" class="md-nav__link">
+    When to use this
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-to-know" class="md-nav__link">
+    Things to know
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#credits" class="md-nav__link">
+    Credits
   </a>
   
 </li>
@@ -1360,38 +1381,70 @@
             <article class="md-content__inner md-typeset">
               
                 
-<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/README.md" title="Edit this page" class="md-content__button md-icon">
+<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/heater-diagnostics.md" title="Edit this page" class="md-content__button md-icon">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z"/></svg>
 </a>
 
 
-<h1 id="theos-klipper-fork">THEOS Klipper Fork<a class="headerlink" href="#theos-klipper-fork" title="Permanent link">&para;</a></h1>
-<p>A fork of <a href="https://www.klipper3d.org/">Klipper</a> maintained by Matt The Printing Nerd, bundling additional features used by the <a href="https://github.com/MSzturc/THEOS">THEOS</a> printer operating system on top of stock Klipper.</p>
-<p>The core Klipper experience is unchanged: if you already run Klipper, everything you know still applies. Stock documentation at <a href="https://www.klipper3d.org/">klipper3d.org</a> remains authoritative for installation, kinematics, tuning, and everything not listed below.</p>
-<h2 id="fork-specific-features">Fork-specific features<a class="headerlink" href="#fork-specific-features" title="Permanent link">&para;</a></h2>
+<h1 id="heater-diagnostics">Heater Diagnostics<a class="headerlink" href="#heater-diagnostics" title="Permanent link">&para;</a></h1>
+<h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
+<p>When something goes wrong with a heater — a thermistor wire breaks, a
+sensor falls off the bed, an ADC reads outside its calibrated range —
+Klipper triggers an MCU shutdown and prints an error line. The stock
+shutdown text names the failure ("ADC out of range") but doesn't say
+<em>which</em> heater is to blame. On a printer with one heater that's no
+problem; on a printer with hotend, bed, chamber, and a couple of
+generic heaters, finding the right thermistor takes longer than it
+should.</p>
+<p>This fork adds two small quality-of-life touches on the diagnostic
+path:</p>
+<ol>
+<li><strong>ADC-out-of-range shutdowns name the offending heater.</strong> When the
+   firmware reports an ADC range fault, the shutdown message now lists
+   each heater whose <code>last_temp</code> is outside its configured <code>[min_temp,
+   max_temp]</code> window, with the actual reading and the configured
+   bounds. Goes in alongside the per-ADC-sensor diagnostic that already
+   ships in stock Klipper.</li>
+<li><strong><code>PrinterHeaters.lookup_heater</code> accepts the full section name.</strong>
+   Other modules (and macros that go through <code>printer.lookup_object</code>)
+   can now resolve a heater by <code>"generic_heater chamber"</code> as well as by
+   the bare <code>"chamber"</code> short name.</li>
+</ol>
+<p>Neither change adds a new G-code command. They tighten the loop between
+"something failed" and "I know what failed."</p>
+<h2 id="when-to-use-this">When to use this<a class="headerlink" href="#when-to-use-this" title="Permanent link">&para;</a></h2>
+<p>Both features are passive — they kick in automatically when relevant.
+You don't reach for them; you just notice they're there the first time
+a thermistor falls off mid-print.</p>
+<h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="sensorless_homing.html"><strong>Sensorless Homing</strong></a> — StallGuard-based homing with per-rail <code>home_current</code>, <code>min_home_dist</code>, and <code>homing_accel</code>; guaranteed post-home current restore; multi-stepper-per-rail current swap. Based on work by Brandon Nance, Bea Nance, Rogerio Goncalves, and Zeanon on Kalico, re-derived on the current Klipper base.</li>
-<li><a href="reset_velocity_limit.html"><strong><code>RESET_VELOCITY_LIMIT</code> G-code</strong></a> — restores <code>max_velocity</code>, <code>max_accel</code>, <code>square_corner_velocity</code>, and <code>minimum_cruise_ratio</code> to their configured values in one call, undoing any runtime <code>SET_VELOCITY_LIMIT</code> / <code>M204</code> override. Based on Kalico PR #472 by Matt Szturc.</li>
-<li><a href="tmc_drivers.html"><strong>TMC Drivers</strong></a> — motor-data-driven autotuning of chopper/PWM/hysteresis/StallGuard/CoolStep, per-stepper low-noise homing profile, TMC5160 driver_cs and short_conf, TMC2240 driver_cs / current_range / mandatory rref, mandatory sense_resistor, stepstick lookup table. Combines Klipper3d PR #6644 (Honest Brothers), Kalico PRs #382/#444/#525/#556/#613, and original autotuning work.</li>
-<li><a href="configparser_extensions.html"><strong>ConfigParser Extensions</strong></a> — variable interpolation (<code>${section.option}</code>), arithmetic evaluation with <code>min</code>/<code>max</code>/<code>abs</code>/<code>round</code>, default values (<code>:default</code>, <code>:None</code>), printer.cfg-overrides-sub-configs semantics, conditional includes, variable references in <code>[include]</code> paths, recursive subfolder globs, escape syntax (<code>\${literal}</code>), and the <code>RELOAD_GCODE_MACROS</code> G-code. Based on Kalico PRs #448/#482/#753 by Frank Tackitt and original work by Matt Szturc.</li>
-<li><a href="fan_control.html"><strong>Fan Control</strong></a> — <code>min_power</code> duty floor and <code>power</code> status key for actual PWM duty; <code>initial_speed</code> for at-startup fan command; <code>control: curve</code> for <code>[temperature_fan]</code> with point-list interpolation and heating/cooling hysteresis; optional short <code>id:</code> alias for <code>SET_FAN_SPEED</code> on <code>[fan_generic]</code>; hardware-PWM shutdown handling and kick-start last-value reset. Based on Kalico PRs #44/#193/#433/#436/#466/#819 by Kubaracek, Zeanon, Frédéric Beaucamp, NokkOnEffect, and Rogerio Goncalves, plus original work by Matt Szturc.</li>
-<li><a href="heater-pid-autotune.html"><strong>PID Autotune (Adaptive Relay)</strong></a> — <code>PID_CALIBRATE</code> rewritten on the Taysom &amp; Sorensen iterative method with amplitude-based convergence and a verification heat-up; better suited to high-thermal-mass beds and chamber heaters than the stock single-cycle Åström-Hägglund tune. Based on Kalico PR #62 by Dan Sorensen.</li>
-<li><a href="heater-pid-velocity.html"><strong>Velocity-Form PID</strong></a> — <code>control: pid_v</code> selects a velocity-form PID alternative to the positional controller, with <code>SET_HEATER_PID</code> for runtime Kp/Ki/Kd retuning on either algorithm. Based on Kalico PR #47 by Dans98 and PRs #35/#98 for the <code>SET_HEATER_PID</code> command.</li>
-<li><a href="heater-pid-profiles.html"><strong>PID Profiles</strong></a> — per-heater named profiles for PID/PID-velocity/dual-loop gains and <code>smooth_time</code>, with <code>PID_PROFILE LOAD/SAVE/REMOVE</code>, profile-aware <code>PID_CALIBRATE</code>, and <code>SET_SMOOTH_TIME</code>. Based on Kalico PR #162 by Vladimir Vukicevic with follow-up fixes by Tomas Petrlik.</li>
-<li><a href="heater-dual-loop-pid.html"><strong>Dual-Loop PID</strong></a> — <code>control: dual_loop_pid</code> cascades an outer (load) loop into an inner (element) loop with a hard <code>inner_max_temp</code> ceiling, two-pass calibration via <code>PID_CALIBRATE</code>. Based on Kalico PR #735 by Zeanon with follow-up fixes in PRs #758 / #809.</li>
-<li><a href="heater-mpc.html"><strong>Model Predictive Control (MPC)</strong></a> — <code>control: mpc</code> model-predictive heater controller with <code>MPC_CALIBRATE</code> and live <code>MPC_SET</code> tuning, fan-tracking via <code>fan_ambient_transfer</code> breakpoints, filament-cooling load with <code>filament_diameter</code>/<code>density</code>/<code>heat_capacity</code>, virtual <code>mpc_block_temperature</code> and <code>mpc_ambient_temperature</code> sensors. Based on Lasse Dalegaard's Klipper-MPC implementation with calibration, live-tuning, and virtual-sensor extensions from Kalico PRs #447/#468/#517/#555/#708/#732/#775/#819.</li>
-<li><a href="heater-cold-extrude.html"><strong>Cold Extrude</strong></a> — Marlin-compatible <code>M302</code> and Klipper-native <code>COLD_EXTRUDE</code> for runtime override of <code>min_extrude_temp</code>, with a session-only enable flag and a persisted threshold update. Based on Kalico PR #750 by Zeanon, with the dual-sensor heater follow-up in PR #766.</li>
-<li><a href="heater-diagnostics.html"><strong>Heater Diagnostics</strong></a> — ADC out-of-range shutdowns now name the offending heater and report its <code>last_temp</code> against the configured <code>min_temp</code>/<code>max_temp</code>; <code>PrinterHeaters.lookup_heater</code> accepts the full section name as shorthand. Based on Kalico PRs #182 and #252 by Rogerio Goncalves.</li>
-<li><a href="bdsensor.html"><strong>BDSensor</strong></a> — in-tree integration of the contactless inductive bed-distance probe; <code>[BDsensor]</code> config section, <code>BDSENSOR_*</code> G-code commands, automatic firmware build (<code>src-y += BD_sensor.c</code>), and <code>[board_pins]</code> alias resolution on <code>sda_pin</code> / <code>scl_pin</code> / <code>endstop_pin</code>. Based on work by Mark Yue, integrated from upstream <code>new</code> branch HEAD <code>8d0f833</code>.</li>
-<li><a href="use_probe_xy_offsets.html"><strong><code>use_probe_xy_offsets</code> Config Key</strong></a> — explicit per-section override for whether <code>ProbePointsHelper</code>-based probing applies the probe's X/Y offsets, exposed on <code>[bed_mesh]</code>, <code>[bed_tilt]</code>, <code>[z_tilt]</code>, <code>[quad_gantry_level]</code>, <code>[delta_calibrate]</code>, and <code>[screws_tilt_adjust]</code>. Based on Kalico PR #500 by Rogerio Goncalves.</li>
-<li><a href="plugin_system.html"><strong>Plugin System</strong></a> — load extras from <code>klippy/plugins/</code> without marking the install dirty; supports both single-file and package-style plugins. Based on Kalico PRs #82 and #100 by Brandon Nance, with package-directory support by Uku.</li>
-<li><a href="log_rotation.html"><strong>Log Rotation</strong></a> — <code>--rotate-log-at-restart</code> startup flag and <code>LOG_ROLLOVER</code> G-code for explicit log rollover, alongside upstream's midnight rotation. Based on Kalico PRs #181 and #498 by Rogerio Goncalves.</li>
-<li><a href="gcode_shell_command.html"><strong>gcode_shell_command</strong></a> — <code>[gcode_shell_command &lt;name&gt;]</code> config sections expose configured shell commands as <code>RUN_SHELL_COMMAND CMD=&lt;name&gt;</code> G-code with timeouts, parameter passthrough, and streamed output. Based on Eric Callahan's original extension, brought into Kalico via PRs #71 and #777 by Rogerio Goncalves and Clifford.</li>
-<li><a href="autoload_modules.html"><strong>Autoload Modules</strong></a> — <code>[force_move]</code>, <code>[respond]</code>, and <code>[exclude_object]</code> are loaded by default with <code>enable_&lt;name&gt;</code> opt-out keys, removing common boilerplate from <code>printer.cfg</code>. Based on Kalico PRs #135 and #306 by Rogerio Goncalves and the respond-default change.</li>
-<li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
-<li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
-<li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
+<li><strong>The heater diagnostic appears in addition to the per-ADC-sensor
+  one.</strong> Klipper already emits a "Sensor 'X' temperature Y not in range
+  A:B" line during <code>ADC out of range</code> shutdowns, naming the ADC sensor
+  whose voltage clipped. The new heater diagnostic adds parallel
+  information from the heater's perspective: which heater (by section
+  name) saw a <code>last_temp</code> outside its safety window, and what the
+  configured <code>min_temp</code>/<code>max_temp</code> were. The two viewpoints can name
+  different things — the ADC sensor name (e.g. <code>MAX31865 chamber_rtd</code>)
+  and the heater section name (e.g. <code>heater_generic chamber</code>) for the
+  same physical failure — which is helpful for diagnosis.</li>
+<li><strong>The diagnostic only fires for heaters with <code>is_adc_faulty()</code>.</strong> All
+  built-in heater classes implement it. A future third-party heater
+  module without the method would silently be skipped rather than
+  masking the original ADC error with an <code>AttributeError</code>.</li>
+<li><strong><code>lookup_heater("&lt;prefix&gt; &lt;name&gt;")</code> strips the prefix once.</strong> Anything
+  before the first space is dropped before the lookup. There is no
+  validation that the prefix is a known section type — the call
+  succeeds as long as the part after the first space is the heater's
+  registered short name.</li>
 </ul>
+<h2 id="credits">Credits<a class="headerlink" href="#credits" title="Permanent link">&para;</a></h2>
+<p>Based on the ADC out-of-range diagnostics from the Kalico community
+(Rogerio Goncalves, KalicoCrew PR #182), the companion <code>hasattr</code> guard
+(KalicoCrew PR #252), and the <code>lookup_heater</code> shorthand fix
+(KalicoCrew PR <code>9bd0a03</code>). Re-derived against Klipper's existing
+<code>error_mcu.add_clarify</code> extension hook so the heater diagnostic
+composes cleanly with the per-ADC-sensor one.</p>
 
               
             </article>

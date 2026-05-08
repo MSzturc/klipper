@@ -13,7 +13,7 @@
     
     
       
-        <title>THEOS Klipper Fork - Klipper documentation</title>
+        <title>Model Predictive Temperature Control (MPC) - Klipper documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#theos-klipper-fork" class="md-skip">
+        <a href="#model-predictive-temperature-control-mpc" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              THEOS Klipper Fork
+              Model Predictive Temperature Control (MPC)
             
           </span>
         </div>
@@ -1342,8 +1342,118 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#fork-specific-features" class="md-nav__link">
-    Fork-specific features
+  <a href="#what-this-is" class="md-nav__link">
+    What this is
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-this" class="md-nav__link">
+    When to use this
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    Configuration
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#required" class="md-nav__link">
+    Required
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#block-thermal-properties" class="md-nav__link">
+    Block thermal properties
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#filament-cooling-load-hotends-only" class="md-nav__link">
+    Filament cooling load (hotends only)
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cooling-fan-tracking" class="md-nav__link">
+    Cooling fan tracking
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minimal-example" class="md-nav__link">
+    Minimal example
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#g-code-commands" class="md-nav__link">
+    G-code commands
+  </a>
+  
+    <nav class="md-nav" aria-label="G-code commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mpc_calibrate" class="md-nav__link">
+    MPC_CALIBRATE
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#mpc_set" class="md-nav__link">
+    MPC_SET
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#virtual-sensors" class="md-nav__link">
+    Virtual sensors
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#calibration" class="md-nav__link">
+    Calibration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-to-know" class="md-nav__link">
+    Things to know
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#credits" class="md-nav__link">
+    Credits
   </a>
   
 </li>
@@ -1360,38 +1470,401 @@
             <article class="md-content__inner md-typeset">
               
                 
-<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/README.md" title="Edit this page" class="md-content__button md-icon">
+<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/heater-mpc.md" title="Edit this page" class="md-content__button md-icon">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z"/></svg>
 </a>
 
 
-<h1 id="theos-klipper-fork">THEOS Klipper Fork<a class="headerlink" href="#theos-klipper-fork" title="Permanent link">&para;</a></h1>
-<p>A fork of <a href="https://www.klipper3d.org/">Klipper</a> maintained by Matt The Printing Nerd, bundling additional features used by the <a href="https://github.com/MSzturc/THEOS">THEOS</a> printer operating system on top of stock Klipper.</p>
-<p>The core Klipper experience is unchanged: if you already run Klipper, everything you know still applies. Stock documentation at <a href="https://www.klipper3d.org/">klipper3d.org</a> remains authoritative for installation, kinematics, tuning, and everything not listed below.</p>
-<h2 id="fork-specific-features">Fork-specific features<a class="headerlink" href="#fork-specific-features" title="Permanent link">&para;</a></h2>
+<h1 id="model-predictive-temperature-control-mpc">Model Predictive Temperature Control (MPC)<a class="headerlink" href="#model-predictive-temperature-control-mpc" title="Permanent link">&para;</a></h1>
+<h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
+<p>PID heater control reacts to the temperature error: the controller has
+no idea what the heater <em>should</em> do at any given moment, only what the
+sensor <em>says</em>. That works well for steady-state holding but reacts late
+to predictable disturbances — filament cooling the hotend during fast
+extrusion, the part fan kicking up, a cold load on the bed.</p>
+<p>Model Predictive Control (MPC) flips the model around. Instead of
+reacting to error, MPC carries an internal thermal model of the heater
+(its heat capacity, its loss to ambient, the energy carried away by
+filament, the additional cooling from a part fan) and computes the PWM
+duty needed to maintain the requested temperature <em>plus</em> the energy
+needed to balance any disturbance the model knows about. The sensor is
+used to correct model drift, not to drive the actuator directly.</p>
+<p>This fork imports MPC as a third heater control algorithm
+(<code>control: mpc</code>) alongside <code>pid</code> and <code>pid_v</code>. Calibration runs through
+<code>MPC_CALIBRATE</code>, live tuning through <code>MPC_SET</code>, and the model's
+internal block-temperature and ambient-temperature estimates are
+exposed as virtual <code>temperature_sensor</code> objects so they can be charted,
+logged, or referenced by other macros.</p>
+<h2 id="when-to-use-this">When to use this<a class="headerlink" href="#when-to-use-this" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="sensorless_homing.html"><strong>Sensorless Homing</strong></a> — StallGuard-based homing with per-rail <code>home_current</code>, <code>min_home_dist</code>, and <code>homing_accel</code>; guaranteed post-home current restore; multi-stepper-per-rail current swap. Based on work by Brandon Nance, Bea Nance, Rogerio Goncalves, and Zeanon on Kalico, re-derived on the current Klipper base.</li>
-<li><a href="reset_velocity_limit.html"><strong><code>RESET_VELOCITY_LIMIT</code> G-code</strong></a> — restores <code>max_velocity</code>, <code>max_accel</code>, <code>square_corner_velocity</code>, and <code>minimum_cruise_ratio</code> to their configured values in one call, undoing any runtime <code>SET_VELOCITY_LIMIT</code> / <code>M204</code> override. Based on Kalico PR #472 by Matt Szturc.</li>
-<li><a href="tmc_drivers.html"><strong>TMC Drivers</strong></a> — motor-data-driven autotuning of chopper/PWM/hysteresis/StallGuard/CoolStep, per-stepper low-noise homing profile, TMC5160 driver_cs and short_conf, TMC2240 driver_cs / current_range / mandatory rref, mandatory sense_resistor, stepstick lookup table. Combines Klipper3d PR #6644 (Honest Brothers), Kalico PRs #382/#444/#525/#556/#613, and original autotuning work.</li>
-<li><a href="configparser_extensions.html"><strong>ConfigParser Extensions</strong></a> — variable interpolation (<code>${section.option}</code>), arithmetic evaluation with <code>min</code>/<code>max</code>/<code>abs</code>/<code>round</code>, default values (<code>:default</code>, <code>:None</code>), printer.cfg-overrides-sub-configs semantics, conditional includes, variable references in <code>[include]</code> paths, recursive subfolder globs, escape syntax (<code>\${literal}</code>), and the <code>RELOAD_GCODE_MACROS</code> G-code. Based on Kalico PRs #448/#482/#753 by Frank Tackitt and original work by Matt Szturc.</li>
-<li><a href="fan_control.html"><strong>Fan Control</strong></a> — <code>min_power</code> duty floor and <code>power</code> status key for actual PWM duty; <code>initial_speed</code> for at-startup fan command; <code>control: curve</code> for <code>[temperature_fan]</code> with point-list interpolation and heating/cooling hysteresis; optional short <code>id:</code> alias for <code>SET_FAN_SPEED</code> on <code>[fan_generic]</code>; hardware-PWM shutdown handling and kick-start last-value reset. Based on Kalico PRs #44/#193/#433/#436/#466/#819 by Kubaracek, Zeanon, Frédéric Beaucamp, NokkOnEffect, and Rogerio Goncalves, plus original work by Matt Szturc.</li>
-<li><a href="heater-pid-autotune.html"><strong>PID Autotune (Adaptive Relay)</strong></a> — <code>PID_CALIBRATE</code> rewritten on the Taysom &amp; Sorensen iterative method with amplitude-based convergence and a verification heat-up; better suited to high-thermal-mass beds and chamber heaters than the stock single-cycle Åström-Hägglund tune. Based on Kalico PR #62 by Dan Sorensen.</li>
-<li><a href="heater-pid-velocity.html"><strong>Velocity-Form PID</strong></a> — <code>control: pid_v</code> selects a velocity-form PID alternative to the positional controller, with <code>SET_HEATER_PID</code> for runtime Kp/Ki/Kd retuning on either algorithm. Based on Kalico PR #47 by Dans98 and PRs #35/#98 for the <code>SET_HEATER_PID</code> command.</li>
-<li><a href="heater-pid-profiles.html"><strong>PID Profiles</strong></a> — per-heater named profiles for PID/PID-velocity/dual-loop gains and <code>smooth_time</code>, with <code>PID_PROFILE LOAD/SAVE/REMOVE</code>, profile-aware <code>PID_CALIBRATE</code>, and <code>SET_SMOOTH_TIME</code>. Based on Kalico PR #162 by Vladimir Vukicevic with follow-up fixes by Tomas Petrlik.</li>
-<li><a href="heater-dual-loop-pid.html"><strong>Dual-Loop PID</strong></a> — <code>control: dual_loop_pid</code> cascades an outer (load) loop into an inner (element) loop with a hard <code>inner_max_temp</code> ceiling, two-pass calibration via <code>PID_CALIBRATE</code>. Based on Kalico PR #735 by Zeanon with follow-up fixes in PRs #758 / #809.</li>
-<li><a href="heater-mpc.html"><strong>Model Predictive Control (MPC)</strong></a> — <code>control: mpc</code> model-predictive heater controller with <code>MPC_CALIBRATE</code> and live <code>MPC_SET</code> tuning, fan-tracking via <code>fan_ambient_transfer</code> breakpoints, filament-cooling load with <code>filament_diameter</code>/<code>density</code>/<code>heat_capacity</code>, virtual <code>mpc_block_temperature</code> and <code>mpc_ambient_temperature</code> sensors. Based on Lasse Dalegaard's Klipper-MPC implementation with calibration, live-tuning, and virtual-sensor extensions from Kalico PRs #447/#468/#517/#555/#708/#732/#775/#819.</li>
-<li><a href="heater-cold-extrude.html"><strong>Cold Extrude</strong></a> — Marlin-compatible <code>M302</code> and Klipper-native <code>COLD_EXTRUDE</code> for runtime override of <code>min_extrude_temp</code>, with a session-only enable flag and a persisted threshold update. Based on Kalico PR #750 by Zeanon, with the dual-sensor heater follow-up in PR #766.</li>
-<li><a href="heater-diagnostics.html"><strong>Heater Diagnostics</strong></a> — ADC out-of-range shutdowns now name the offending heater and report its <code>last_temp</code> against the configured <code>min_temp</code>/<code>max_temp</code>; <code>PrinterHeaters.lookup_heater</code> accepts the full section name as shorthand. Based on Kalico PRs #182 and #252 by Rogerio Goncalves.</li>
-<li><a href="bdsensor.html"><strong>BDSensor</strong></a> — in-tree integration of the contactless inductive bed-distance probe; <code>[BDsensor]</code> config section, <code>BDSENSOR_*</code> G-code commands, automatic firmware build (<code>src-y += BD_sensor.c</code>), and <code>[board_pins]</code> alias resolution on <code>sda_pin</code> / <code>scl_pin</code> / <code>endstop_pin</code>. Based on work by Mark Yue, integrated from upstream <code>new</code> branch HEAD <code>8d0f833</code>.</li>
-<li><a href="use_probe_xy_offsets.html"><strong><code>use_probe_xy_offsets</code> Config Key</strong></a> — explicit per-section override for whether <code>ProbePointsHelper</code>-based probing applies the probe's X/Y offsets, exposed on <code>[bed_mesh]</code>, <code>[bed_tilt]</code>, <code>[z_tilt]</code>, <code>[quad_gantry_level]</code>, <code>[delta_calibrate]</code>, and <code>[screws_tilt_adjust]</code>. Based on Kalico PR #500 by Rogerio Goncalves.</li>
-<li><a href="plugin_system.html"><strong>Plugin System</strong></a> — load extras from <code>klippy/plugins/</code> without marking the install dirty; supports both single-file and package-style plugins. Based on Kalico PRs #82 and #100 by Brandon Nance, with package-directory support by Uku.</li>
-<li><a href="log_rotation.html"><strong>Log Rotation</strong></a> — <code>--rotate-log-at-restart</code> startup flag and <code>LOG_ROLLOVER</code> G-code for explicit log rollover, alongside upstream's midnight rotation. Based on Kalico PRs #181 and #498 by Rogerio Goncalves.</li>
-<li><a href="gcode_shell_command.html"><strong>gcode_shell_command</strong></a> — <code>[gcode_shell_command &lt;name&gt;]</code> config sections expose configured shell commands as <code>RUN_SHELL_COMMAND CMD=&lt;name&gt;</code> G-code with timeouts, parameter passthrough, and streamed output. Based on Eric Callahan's original extension, brought into Kalico via PRs #71 and #777 by Rogerio Goncalves and Clifford.</li>
-<li><a href="autoload_modules.html"><strong>Autoload Modules</strong></a> — <code>[force_move]</code>, <code>[respond]</code>, and <code>[exclude_object]</code> are loaded by default with <code>enable_&lt;name&gt;</code> opt-out keys, removing common boilerplate from <code>printer.cfg</code>. Based on Kalico PRs #135 and #306 by Rogerio Goncalves and the respond-default change.</li>
-<li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
-<li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
-<li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
+<li>A hotend that drops temperature noticeably during fast volumetric
+  extrusion. MPC sees the requested filament feed rate, predicts the
+  cooling load, and adds PWM ahead of the sensor reading the dip.</li>
+<li>A hotend whose target temperature lags by 5–10 °C when the part fan
+  ramps from 0 to 100 %. MPC includes a fan-driven ambient-transfer term
+  that compensates without you having to tune for it.</li>
+<li>A heatbed that overshoots when the chamber is closed and undershoots
+  when it's open. MPC's ambient-temperature estimate updates with the
+  measured loss rate; PID would need separate tunes for each case.</li>
+<li>A user who wants the heater target to be a setpoint rather than a
+  controller-tuning exercise. MPC is set-it-and-forget-it once the
+  model parameters are calibrated.</li>
 </ul>
+<p>You don't need MPC if your existing PID-tuned heater is already quiet
+and tracks setpoints to within 1 °C under your normal operating range.
+PID is simpler to reason about and has fewer config parameters; reach
+for MPC when the predictive aspect actually buys you something.</p>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>A heater opts into MPC by setting <code>control: mpc</code>. The heater section
+then takes a number of additional keys describing the thermal model.
+Most have sensible defaults; the only mandatory MPC-specific key is
+<code>heater_power</code> (the wattage of the heater element).</p>
+<h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>control</code></td>
+<td><code>pid</code></td>
+<td>Set to <code>mpc</code>.</td>
+</tr>
+<tr>
+<td><code>heater_power</code></td>
+<td>required</td>
+<td>Heater element power in watts. Drives the model's energy-input term. For a hotend cartridge, the rated wattage on the manufacturer's spec sheet (40 W, 60 W, etc.). For a heated bed, the measured power draw at 24 V × the configured <code>max_power</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="block-thermal-properties">Block thermal properties<a class="headerlink" href="#block-thermal-properties" title="Permanent link">&para;</a></h3>
+<p>Calibrated automatically by <code>MPC_CALIBRATE</code>. You can pre-seed them from
+a previous calibration to skip the first calibration pass.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>block_heat_capacity</code></td>
+<td>calibrated</td>
+<td>Effective thermal capacity of the heated mass in J/°C. Higher = slower response.</td>
+</tr>
+<tr>
+<td><code>ambient_transfer</code></td>
+<td>calibrated</td>
+<td>Conductive/convective heat loss to ambient in W/°C.</td>
+</tr>
+<tr>
+<td><code>sensor_responsiveness</code></td>
+<td>calibrated</td>
+<td>Sensor lag coefficient. Higher = sensor reads slower than the block changes.</td>
+</tr>
+<tr>
+<td><code>target_reach_time</code></td>
+<td><code>2.0</code></td>
+<td>Time in seconds the controller is allowed to ramp into a step setpoint change.</td>
+</tr>
+<tr>
+<td><code>smoothing</code></td>
+<td><code>0.83</code></td>
+<td>Output smoothing factor, 0–1. Higher = smoother PWM, lower = more responsive.</td>
+</tr>
+<tr>
+<td><code>min_ambient_change</code></td>
+<td><code>1.0</code></td>
+<td>Minimum ambient-temperature drift in °C before the model updates its ambient estimate.</td>
+</tr>
+<tr>
+<td><code>steady_state_rate</code></td>
+<td><code>0.5</code></td>
+<td>Block-temperature change per second below which the model considers itself in steady state.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="filament-cooling-load-hotends-only">Filament cooling load (hotends only)<a class="headerlink" href="#filament-cooling-load-hotends-only" title="Permanent link">&para;</a></h3>
+<p>When extrusion is active, MPC subtracts the energy the filament carries
+away from the block. This needs the filament's heat capacity and how
+much filament is currently being fed.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>filament_diameter</code></td>
+<td><code>1.75</code></td>
+<td>Filament diameter in mm.</td>
+</tr>
+<tr>
+<td><code>filament_density</code></td>
+<td><code>1.2</code></td>
+<td>Filament density in g/cm³. PLA ≈ 1.24, PETG ≈ 1.27, ABS ≈ 1.04.</td>
+</tr>
+<tr>
+<td><code>filament_heat_capacity</code></td>
+<td><code>0.0</code></td>
+<td>Filament-specific heat capacity in J/(g·°C). <code>0.0</code> disables the extrusion-cooling feedforward; set to a filament-appropriate value (PLA ≈ 1.8, PETG ≈ 1.7, ABS ≈ 1.4) to enable it.</td>
+</tr>
+<tr>
+<td><code>maximum_retract</code></td>
+<td><code>2.0</code></td>
+<td>Maximum retract distance in mm; clamps a single retract event so a runaway extruder cannot poison the cooling estimate.</td>
+</tr>
+<tr>
+<td><code>filament_temperature_source</code></td>
+<td><code>ambient</code></td>
+<td>One of: <code>ambient</code> (use the model's ambient estimate), <code>sensor</code> (use a configured ambient sensor — see below), or a fixed °C value (e.g. <code>25</code>) for a constant assumed filament temperature.</td>
+</tr>
+<tr>
+<td><code>ambient_temp_sensor</code></td>
+<td>unset</td>
+<td>Section name of a <code>[temperature_sensor]</code> to read filament-feed temperature from when <code>filament_temperature_source: sensor</code>.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="cooling-fan-tracking">Cooling fan tracking<a class="headerlink" href="#cooling-fan-tracking" title="Permanent link">&para;</a></h3>
+<p>When the heater is influenced by a part-cooling fan, MPC can fold that
+into the model so changes to fan speed don't introduce setpoint error.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cooling_fan</code></td>
+<td>unset</td>
+<td>Section name of the fan whose speed influences this heater. Typically the part-cooling fan for a hotend.</td>
+</tr>
+<tr>
+<td><code>fan_ambient_transfer</code></td>
+<td>empty</td>
+<td>Comma-separated list of additional <code>ambient_transfer</code> values, one per discrete fan-speed step (0 %, 25 %, 50 %, 75 %, 100 %). The model interpolates between them by current fan duty. Leave empty to ignore fan effects.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="minimal-example">Minimal example<a class="headerlink" href="#minimal-example" title="Permanent link">&para;</a></h3>
+<p>A 40 W hotend on a Voron 2.4-style printer with a part-cooling fan:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[extruder]</span>
+<span class="na">heater_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PA2</span>
+<span class="na">sensor_type</span><span class="o">:</span><span class="w"> </span><span class="s">ATC Semitec 104GT-2</span>
+<span class="na">sensor_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PF4</span>
+<span class="na">min_temp</span><span class="o">:</span><span class="w"> </span><span class="s">0</span>
+<span class="na">max_temp</span><span class="o">:</span><span class="w"> </span><span class="s">320</span>
+<span class="na">control</span><span class="o">:</span><span class="w"> </span><span class="s">mpc</span>
+<span class="na">heater_power</span><span class="o">:</span><span class="w"> </span><span class="s">40</span>
+<span class="na">filament_diameter</span><span class="o">:</span><span class="w"> </span><span class="s">1.75</span>
+<span class="na">filament_density</span><span class="o">:</span><span class="w"> </span><span class="s">1.24</span>
+<span class="na">filament_heat_capacity</span><span class="o">:</span><span class="w"> </span><span class="s">1.8</span>
+<span class="na">cooling_fan</span><span class="o">:</span><span class="w"> </span><span class="s">fan</span>
+<span class="na">fan_ambient_transfer</span><span class="o">:</span><span class="w"> </span><span class="s">0.07, 0.085, 0.1, 0.115, 0.13</span>
+</code></pre></div>
+
+<p><code>block_heat_capacity</code>, <code>ambient_transfer</code>, and <code>sensor_responsiveness</code>
+are calibrated automatically — leave them out for the first start, run
+<code>MPC_CALIBRATE</code>, then <code>SAVE_CONFIG</code>.</p>
+<h2 id="g-code-commands">G-code commands<a class="headerlink" href="#g-code-commands" title="Permanent link">&para;</a></h2>
+<h3 id="mpc_calibrate"><code>MPC_CALIBRATE</code><a class="headerlink" href="#mpc_calibrate" title="Permanent link">&para;</a></h3>
+<p>Run a thermal calibration on the named heater. Drives the heater to the
+target, observes the warm-up curve, and fits <code>block_heat_capacity</code>,
+<code>ambient_transfer</code>, and <code>sensor_responsiveness</code>. Takes 10–30 minutes
+depending on heater mass.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HEATER</code></td>
+<td>Short name of the heater (e.g. <code>extruder</code>, <code>heater_bed</code>, <code>chamber</code>).</td>
+</tr>
+<tr>
+<td><code>TARGET</code></td>
+<td>Calibration target temperature in °C. Default: 200 for a hotend, 90 for a heated bed. Minimum allowed value 60 °C.</td>
+</tr>
+<tr>
+<td><code>FAN_BREAKPOINTS</code></td>
+<td>Optional integer 2–10 specifying how many discrete fan speeds to characterise (only meaningful when the heater has a <code>cooling_fan</code>). Default <code>5</code>.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>MPC_CALIBRATE HEATER=extruder
+MPC_CALIBRATE HEATER=heater_bed TARGET=80
+MPC_CALIBRATE HEATER=chamber TARGET=55
+</code></pre></div>
+
+<p>After calibration completes successfully, <code>SAVE_CONFIG</code> writes the
+fitted parameters into the heater section.</p>
+<h3 id="mpc_set"><code>MPC_SET</code><a class="headerlink" href="#mpc_set" title="Permanent link">&para;</a></h3>
+<p>Update calibrated MPC parameters at runtime, no restart required.
+Useful for live experimentation and for tuning into multiple profiles
+without re-running the full calibration.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HEATER</code></td>
+<td>Short name of the heater.</td>
+</tr>
+<tr>
+<td><code>BLOCK_HEAT_CAPACITY</code></td>
+<td>Override <code>block_heat_capacity</code>.</td>
+</tr>
+<tr>
+<td><code>SENSOR_RESPONSIVENESS</code></td>
+<td>Override <code>sensor_responsiveness</code>.</td>
+</tr>
+<tr>
+<td><code>AMBIENT_TRANSFER</code></td>
+<td>Override <code>ambient_transfer</code>.</td>
+</tr>
+<tr>
+<td><code>FAN_AMBIENT_TRANSFER</code></td>
+<td>Comma-separated list overriding <code>fan_ambient_transfer</code>.</td>
+</tr>
+<tr>
+<td><code>FILAMENT_DIAMETER</code></td>
+<td>Override <code>filament_diameter</code>.</td>
+</tr>
+<tr>
+<td><code>FILAMENT_DENSITY</code></td>
+<td>Override <code>filament_density</code>.</td>
+</tr>
+<tr>
+<td><code>FILAMENT_HEAT_CAPACITY</code></td>
+<td>Override <code>filament_heat_capacity</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>Any combination may be set in one call; omitted keys keep their current
+value. <code>MPC_SET</code> does <strong>not</strong> persist; use <code>SAVE_CONFIG</code> after a
+permanent change.</p>
+<div class="highlight"><pre><span></span><code>MPC_SET HEATER=extruder BLOCK_HEAT_CAPACITY=14.5 SENSOR_RESPONSIVENESS=0.65
+MPC_SET HEATER=heater_bed AMBIENT_TRANSFER=0.085
+</code></pre></div>
+
+<h2 id="virtual-sensors">Virtual sensors<a class="headerlink" href="#virtual-sensors" title="Permanent link">&para;</a></h2>
+<p>MPC's internal block-temperature estimate (the model's prediction of
+the actual heater-block temperature, distinct from the thermistor
+reading) and ambient-temperature estimate (the inferred environmental
+temperature the model uses for loss calculations) are available as
+ordinary <code>[temperature_sensor]</code> objects. Add a section per estimate:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[mpc_block_temperature extruder_block]</span>
+<span class="na">heater_name</span><span class="o">:</span><span class="w"> </span><span class="s">extruder</span>
+<span class="na">ignore_limits</span><span class="o">:</span><span class="w"> </span><span class="s">True</span>
+
+<span class="k">[mpc_ambient_temperature extruder_ambient]</span>
+<span class="na">heater_name</span><span class="o">:</span><span class="w"> </span><span class="s">extruder</span>
+<span class="na">ignore_limits</span><span class="o">:</span><span class="w"> </span><span class="s">True</span>
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>heater_name</code></td>
+<td>required</td>
+<td>Section name of the MPC-controlled heater whose internal estimate to expose.</td>
+</tr>
+<tr>
+<td><code>ignore_limits</code></td>
+<td><code>False</code></td>
+<td>When <code>True</code>, the sensor's reading is not range-checked against <code>min_temp</code>/<code>max_temp</code>; useful for ambient-temperature sensors whose range covers normal room conditions but might not include cold-start values.</td>
+</tr>
+</tbody>
+</table>
+<p>The exposed sensors show up in printer status as
+<code>temperature_sensor extruder_block</code> etc., chartable by every Klipper
+front-end and consumable as a sensor reference by other features
+(e.g. as a <code>cooling_fan</code> source for a chamber MPC heater).</p>
+<h2 id="calibration">Calibration<a class="headerlink" href="#calibration" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Configure <code>control: mpc</code> and the mandatory <code>heater_power</code> on the
+   heater. Leave the calibrated parameters out for first run.</li>
+<li>Cold-start the printer.</li>
+<li>Run <code>MPC_CALIBRATE HEATER=&lt;name&gt;</code>. Stand by — the autotune will heat
+   to the target, hold, observe cooldown, and run a fan-step pass if a
+   <code>cooling_fan</code> is configured.</li>
+<li>When the prompt to <code>SAVE_CONFIG</code> appears, run it. Klipper restarts
+   with the calibrated parameters baked into the section.</li>
+<li>Optionally seed <code>filament_temperature_source: sensor</code> and a chamber
+   ambient sensor for tighter behaviour on enclosed printers.</li>
+</ol>
+<p>For a heater whose calibration drifts seasonally (a chamber heater
+that's tuned for summer ambient versus winter), use <code>MPC_SET</code> to nudge
+<code>ambient_transfer</code> between the two regimes; or save two profiles and
+swap between them with the <a href="heater-pid-profiles.html">PID profile system</a>
+since profiles support <code>control: mpc</code> too.</p>
+<h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>MPC needs an honest <code>heater_power</code>.</strong> Wrong wattage produces a model
+  that systematically over- or under-drives the PWM. Measure with a
+  bench supply if the rating sticker is questionable.</li>
+<li><strong>Calibration cannot start cold and dry.</strong> The model needs a stable
+  ambient before it can run the warm-up fit. Don't trigger
+  <code>MPC_CALIBRATE</code> immediately after powering on — give the printer 10
+  minutes for the bed to settle near room temperature.</li>
+<li><strong>Calibration minimum is 60 °C.</strong> Below that, the response curve is
+  too short to fit reliably. The default targets (200 °C hotend, 90 °C
+  bed) are tuned for typical printer geometries.</li>
+<li><strong>Fan steps are interpolated linearly between the breakpoints.</strong> With
+  a <code>fan_ambient_transfer</code> list of five values, the model uses the
+  literal value at 0 / 25 / 50 / 75 / 100 % fan and interpolates
+  linearly in between. There is no physical assumption about the
+  underlying curve being linear; the breakpoints define the curve.</li>
+<li><strong>Switching <code>control:</code> between MPC and PID requires a restart.</strong> The
+  controller class is bound at heater setup. To swap algorithms live,
+  define both as profiles (one <code>control: pid</code>, one <code>control: mpc</code>) and
+  use <code>PID_PROFILE LOAD</code>.</li>
+<li><strong>Virtual MPC sensors are read-only and update with the heater.</strong>
+  They follow the heater's normal sample rate (the <code>temperature_callback</code>
+  cadence). They cannot be used as the sensor of another heater
+  directly — they're observation points, not control inputs.</li>
+<li><strong><code>filament_heat_capacity</code> defaults to <code>0.0</code>.</strong> A value of <code>0.0</code>
+  disables the extrusion-cooling feedforward term entirely; set it to
+  a filament-appropriate value (PLA ≈ 1.8 J/(g·°C)) to enable
+  feedforward compensation during extrusion.</li>
+</ul>
+<h2 id="credits">Credits<a class="headerlink" href="#credits" title="Permanent link">&para;</a></h2>
+<p>The MPC controller is based on the Klipper-MPC implementation by Lasse
+Dalegaard. The runtime calibration parameters and <code>MPC_SET</code> live tuning
+were added by the Kalico community (PR #447), with follow-up fixes for
+the filament-heat-capacity defaults, the <code>MPC_CALIBRATE</code> minimum
+target, and the <code>filament_density</code> / <code>filament_heat_capacity</code> status
+exposure (KalicoCrew PRs #468/#517/#555/#708/#732/#819). The virtual
+block- and ambient-temperature sensors are based on PR #775 by the
+KalicoCrew community. All pieces have been re-derived against the
+current Klipper heater module shape.</p>
 
               
             </article>

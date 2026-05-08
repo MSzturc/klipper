@@ -13,7 +13,7 @@
     
     
       
-        <title>THEOS Klipper Fork - Klipper documentation</title>
+        <title>PID Autotune (Adaptive Relay) - Klipper documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#theos-klipper-fork" class="md-skip">
+        <a href="#pid-autotune-adaptive-relay" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              THEOS Klipper Fork
+              PID Autotune (Adaptive Relay)
             
           </span>
         </div>
@@ -1342,8 +1342,56 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#fork-specific-features" class="md-nav__link">
-    Fork-specific features
+  <a href="#what-this-is" class="md-nav__link">
+    What this is
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-this" class="md-nav__link">
+    When to use this
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#g-code-commands" class="md-nav__link">
+    G-code commands
+  </a>
+  
+    <nav class="md-nav" aria-label="G-code commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pid_calibrate" class="md-nav__link">
+    PID_CALIBRATE
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#calibration" class="md-nav__link">
+    Calibration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-to-know" class="md-nav__link">
+    Things to know
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#credits" class="md-nav__link">
+    Credits
   </a>
   
 </li>
@@ -1360,38 +1408,131 @@
             <article class="md-content__inner md-typeset">
               
                 
-<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/README.md" title="Edit this page" class="md-content__button md-icon">
+<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/heater-pid-autotune.md" title="Edit this page" class="md-content__button md-icon">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z"/></svg>
 </a>
 
 
-<h1 id="theos-klipper-fork">THEOS Klipper Fork<a class="headerlink" href="#theos-klipper-fork" title="Permanent link">&para;</a></h1>
-<p>A fork of <a href="https://www.klipper3d.org/">Klipper</a> maintained by Matt The Printing Nerd, bundling additional features used by the <a href="https://github.com/MSzturc/THEOS">THEOS</a> printer operating system on top of stock Klipper.</p>
-<p>The core Klipper experience is unchanged: if you already run Klipper, everything you know still applies. Stock documentation at <a href="https://www.klipper3d.org/">klipper3d.org</a> remains authoritative for installation, kinematics, tuning, and everything not listed below.</p>
-<h2 id="fork-specific-features">Fork-specific features<a class="headerlink" href="#fork-specific-features" title="Permanent link">&para;</a></h2>
+<h1 id="pid-autotune-adaptive-relay">PID Autotune (Adaptive Relay)<a class="headerlink" href="#pid-autotune-adaptive-relay" title="Permanent link">&para;</a></h1>
+<h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
+<p>Stock Klipper's <code>PID_CALIBRATE</code> runs a single Åström-Hägglund relay cycle
+on the heater, fits the response with the Ziegler-Nichols formula, and
+saves the result. This works on a low-thermal-mass hotend, but on a thick
+aluminium bed or a high-mass chamber heater the single-cycle estimate
+often picks gains that overshoot for hours or fail to settle at all.</p>
+<p>This fork replaces the <code>PID_CALIBRATE</code> core with an <strong>adaptive relay
+autotune</strong> based on Taysom &amp; Sorensen's iterative method. The relay
+oscillation is run multiple times with the duty cycle re-tuned between
+iterations until the temperature-amplitude ratio converges, then a
+classical PID gain set is fitted. A second short heat test verifies the
+result against the requested target before the gains are written back.</p>
+<p>The G-code surface is unchanged: you still call <code>PID_CALIBRATE
+HEATER=&lt;name&gt; TARGET=&lt;temperature&gt;</code>. The improvements are entirely
+inside the calibration logic.</p>
+<h2 id="when-to-use-this">When to use this<a class="headerlink" href="#when-to-use-this" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="sensorless_homing.html"><strong>Sensorless Homing</strong></a> — StallGuard-based homing with per-rail <code>home_current</code>, <code>min_home_dist</code>, and <code>homing_accel</code>; guaranteed post-home current restore; multi-stepper-per-rail current swap. Based on work by Brandon Nance, Bea Nance, Rogerio Goncalves, and Zeanon on Kalico, re-derived on the current Klipper base.</li>
-<li><a href="reset_velocity_limit.html"><strong><code>RESET_VELOCITY_LIMIT</code> G-code</strong></a> — restores <code>max_velocity</code>, <code>max_accel</code>, <code>square_corner_velocity</code>, and <code>minimum_cruise_ratio</code> to their configured values in one call, undoing any runtime <code>SET_VELOCITY_LIMIT</code> / <code>M204</code> override. Based on Kalico PR #472 by Matt Szturc.</li>
-<li><a href="tmc_drivers.html"><strong>TMC Drivers</strong></a> — motor-data-driven autotuning of chopper/PWM/hysteresis/StallGuard/CoolStep, per-stepper low-noise homing profile, TMC5160 driver_cs and short_conf, TMC2240 driver_cs / current_range / mandatory rref, mandatory sense_resistor, stepstick lookup table. Combines Klipper3d PR #6644 (Honest Brothers), Kalico PRs #382/#444/#525/#556/#613, and original autotuning work.</li>
-<li><a href="configparser_extensions.html"><strong>ConfigParser Extensions</strong></a> — variable interpolation (<code>${section.option}</code>), arithmetic evaluation with <code>min</code>/<code>max</code>/<code>abs</code>/<code>round</code>, default values (<code>:default</code>, <code>:None</code>), printer.cfg-overrides-sub-configs semantics, conditional includes, variable references in <code>[include]</code> paths, recursive subfolder globs, escape syntax (<code>\${literal}</code>), and the <code>RELOAD_GCODE_MACROS</code> G-code. Based on Kalico PRs #448/#482/#753 by Frank Tackitt and original work by Matt Szturc.</li>
-<li><a href="fan_control.html"><strong>Fan Control</strong></a> — <code>min_power</code> duty floor and <code>power</code> status key for actual PWM duty; <code>initial_speed</code> for at-startup fan command; <code>control: curve</code> for <code>[temperature_fan]</code> with point-list interpolation and heating/cooling hysteresis; optional short <code>id:</code> alias for <code>SET_FAN_SPEED</code> on <code>[fan_generic]</code>; hardware-PWM shutdown handling and kick-start last-value reset. Based on Kalico PRs #44/#193/#433/#436/#466/#819 by Kubaracek, Zeanon, Frédéric Beaucamp, NokkOnEffect, and Rogerio Goncalves, plus original work by Matt Szturc.</li>
-<li><a href="heater-pid-autotune.html"><strong>PID Autotune (Adaptive Relay)</strong></a> — <code>PID_CALIBRATE</code> rewritten on the Taysom &amp; Sorensen iterative method with amplitude-based convergence and a verification heat-up; better suited to high-thermal-mass beds and chamber heaters than the stock single-cycle Åström-Hägglund tune. Based on Kalico PR #62 by Dan Sorensen.</li>
-<li><a href="heater-pid-velocity.html"><strong>Velocity-Form PID</strong></a> — <code>control: pid_v</code> selects a velocity-form PID alternative to the positional controller, with <code>SET_HEATER_PID</code> for runtime Kp/Ki/Kd retuning on either algorithm. Based on Kalico PR #47 by Dans98 and PRs #35/#98 for the <code>SET_HEATER_PID</code> command.</li>
-<li><a href="heater-pid-profiles.html"><strong>PID Profiles</strong></a> — per-heater named profiles for PID/PID-velocity/dual-loop gains and <code>smooth_time</code>, with <code>PID_PROFILE LOAD/SAVE/REMOVE</code>, profile-aware <code>PID_CALIBRATE</code>, and <code>SET_SMOOTH_TIME</code>. Based on Kalico PR #162 by Vladimir Vukicevic with follow-up fixes by Tomas Petrlik.</li>
-<li><a href="heater-dual-loop-pid.html"><strong>Dual-Loop PID</strong></a> — <code>control: dual_loop_pid</code> cascades an outer (load) loop into an inner (element) loop with a hard <code>inner_max_temp</code> ceiling, two-pass calibration via <code>PID_CALIBRATE</code>. Based on Kalico PR #735 by Zeanon with follow-up fixes in PRs #758 / #809.</li>
-<li><a href="heater-mpc.html"><strong>Model Predictive Control (MPC)</strong></a> — <code>control: mpc</code> model-predictive heater controller with <code>MPC_CALIBRATE</code> and live <code>MPC_SET</code> tuning, fan-tracking via <code>fan_ambient_transfer</code> breakpoints, filament-cooling load with <code>filament_diameter</code>/<code>density</code>/<code>heat_capacity</code>, virtual <code>mpc_block_temperature</code> and <code>mpc_ambient_temperature</code> sensors. Based on Lasse Dalegaard's Klipper-MPC implementation with calibration, live-tuning, and virtual-sensor extensions from Kalico PRs #447/#468/#517/#555/#708/#732/#775/#819.</li>
-<li><a href="heater-cold-extrude.html"><strong>Cold Extrude</strong></a> — Marlin-compatible <code>M302</code> and Klipper-native <code>COLD_EXTRUDE</code> for runtime override of <code>min_extrude_temp</code>, with a session-only enable flag and a persisted threshold update. Based on Kalico PR #750 by Zeanon, with the dual-sensor heater follow-up in PR #766.</li>
-<li><a href="heater-diagnostics.html"><strong>Heater Diagnostics</strong></a> — ADC out-of-range shutdowns now name the offending heater and report its <code>last_temp</code> against the configured <code>min_temp</code>/<code>max_temp</code>; <code>PrinterHeaters.lookup_heater</code> accepts the full section name as shorthand. Based on Kalico PRs #182 and #252 by Rogerio Goncalves.</li>
-<li><a href="bdsensor.html"><strong>BDSensor</strong></a> — in-tree integration of the contactless inductive bed-distance probe; <code>[BDsensor]</code> config section, <code>BDSENSOR_*</code> G-code commands, automatic firmware build (<code>src-y += BD_sensor.c</code>), and <code>[board_pins]</code> alias resolution on <code>sda_pin</code> / <code>scl_pin</code> / <code>endstop_pin</code>. Based on work by Mark Yue, integrated from upstream <code>new</code> branch HEAD <code>8d0f833</code>.</li>
-<li><a href="use_probe_xy_offsets.html"><strong><code>use_probe_xy_offsets</code> Config Key</strong></a> — explicit per-section override for whether <code>ProbePointsHelper</code>-based probing applies the probe's X/Y offsets, exposed on <code>[bed_mesh]</code>, <code>[bed_tilt]</code>, <code>[z_tilt]</code>, <code>[quad_gantry_level]</code>, <code>[delta_calibrate]</code>, and <code>[screws_tilt_adjust]</code>. Based on Kalico PR #500 by Rogerio Goncalves.</li>
-<li><a href="plugin_system.html"><strong>Plugin System</strong></a> — load extras from <code>klippy/plugins/</code> without marking the install dirty; supports both single-file and package-style plugins. Based on Kalico PRs #82 and #100 by Brandon Nance, with package-directory support by Uku.</li>
-<li><a href="log_rotation.html"><strong>Log Rotation</strong></a> — <code>--rotate-log-at-restart</code> startup flag and <code>LOG_ROLLOVER</code> G-code for explicit log rollover, alongside upstream's midnight rotation. Based on Kalico PRs #181 and #498 by Rogerio Goncalves.</li>
-<li><a href="gcode_shell_command.html"><strong>gcode_shell_command</strong></a> — <code>[gcode_shell_command &lt;name&gt;]</code> config sections expose configured shell commands as <code>RUN_SHELL_COMMAND CMD=&lt;name&gt;</code> G-code with timeouts, parameter passthrough, and streamed output. Based on Eric Callahan's original extension, brought into Kalico via PRs #71 and #777 by Rogerio Goncalves and Clifford.</li>
-<li><a href="autoload_modules.html"><strong>Autoload Modules</strong></a> — <code>[force_move]</code>, <code>[respond]</code>, and <code>[exclude_object]</code> are loaded by default with <code>enable_&lt;name&gt;</code> opt-out keys, removing common boilerplate from <code>printer.cfg</code>. Based on Kalico PRs #135 and #306 by Rogerio Goncalves and the respond-default change.</li>
-<li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
-<li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
-<li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
+<li>You have a heated bed that overshoots or oscillates after a stock-Klipper
+  PID tune.</li>
+<li>You're tuning a chamber heater, an enclosure heater, or any heater with
+  significant thermal mass where the single-cycle method is known to be
+  fragile.</li>
+<li>You want a tune you can re-run without restarting Klipper between
+  attempts.</li>
 </ul>
+<p>A small all-metal hotend usually tunes fine with the stock single-cycle
+method too. The adaptive autotune costs no extra time on those, so there
+is no reason to fall back, but you don't gain a lot either.</p>
+<h2 id="g-code-commands">G-code commands<a class="headerlink" href="#g-code-commands" title="Permanent link">&para;</a></h2>
+<h3 id="pid_calibrate"><code>PID_CALIBRATE</code><a class="headerlink" href="#pid_calibrate" title="Permanent link">&para;</a></h3>
+<p>Run the autotune on the named heater.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HEATER</code></td>
+<td>Section name of the heater to calibrate (e.g. <code>extruder</code>, <code>heater_bed</code>, <code>heater_generic chamber</code>).</td>
+</tr>
+<tr>
+<td><code>TARGET</code></td>
+<td>Calibration setpoint in °C. The autotune oscillates around this temperature.</td>
+</tr>
+<tr>
+<td><code>TOLERANCE</code></td>
+<td>Optional convergence tolerance on the amplitude ratio between consecutive iterations. Default <code>0.02</code> (2 %). Tighten to <code>0.01</code> for high-precision beds; loosen to <code>0.05</code> if a noisy thermistor prevents convergence.</td>
+</tr>
+<tr>
+<td><code>WRITE_FILE</code></td>
+<td>Optional. When <code>1</code>, dumps the per-sample temperature trace to <code>/tmp/heattest.csv</code> for offline plotting. Default <code>0</code>.</td>
+</tr>
+<tr>
+<td><code>PROFILE</code></td>
+<td>Optional profile name to write the result into when used with the per-heater profile system. Defaults to the active profile (<code>default</code> if none has been loaded).</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>PID_CALIBRATE HEATER=extruder TARGET=240
+PID_CALIBRATE HEATER=heater_bed TARGET=80 TOLERANCE=0.015
+PID_CALIBRATE HEATER=heater_generic chamber TARGET=55 WRITE_FILE=1
+</code></pre></div>
+
+<p>When the autotune completes, Klipper writes <code>pid_kp</code>, <code>pid_ki</code>, <code>pid_kd</code>
+into the active profile and prompts you to run <code>SAVE_CONFIG</code> to persist
+them.</p>
+<h2 id="calibration">Calibration<a class="headerlink" href="#calibration" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Bring the heater near room temperature. Cold start gives the cleanest
+   relay swing.</li>
+<li>Run <code>PID_CALIBRATE HEATER=&lt;name&gt; TARGET=&lt;setpoint&gt;</code> with the same
+   surrounding conditions you'll print under (chamber doors closed, part
+   fan duty as during the print — see <a href="heater-pid-profiles.html">heater-pid-profiles</a>
+   if you need separate profiles for fan-on and fan-off).</li>
+<li>The autotune runs three or more relay cycles, then a verification
+   heat-up. The whole sequence takes 5–15 minutes for a hotend, 30–60
+   minutes for a heated bed.</li>
+<li>When the prompt to <code>SAVE_CONFIG</code> appears, run it to persist the
+   gains. Klipper restarts and the new gains are active.</li>
+</ol>
+<p>If the autotune fails to converge within 12 iterations it raises an
+error and leaves the existing gains untouched. Common causes: a
+thermistor that's loose, a heater wire with a bad crimp introducing
+high-frequency noise, or a <code>TARGET</code> too close to the heater's <code>max_temp</code>
+to leave headroom for the relay swing.</p>
+<h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Targets must leave room for the relay swing.</strong> Pick <code>TARGET</code> at least
+  20 °C below <code>max_temp</code> so the upper relay edge can overshoot without
+  tripping the safety interlock. Targets within 5 °C of <code>max_temp</code> will
+  fail.</li>
+<li><strong>Convergence is amplitude-based, not time-based.</strong> A heater that
+  reaches steady oscillation in two cycles converges in two cycles. A
+  noisy heater may need six or seven. There is no fixed iteration count.</li>
+<li><strong>The verification heat test costs ~2 minutes.</strong> After the relay
+  converges, the autotune drives a brief setpoint step and checks that
+  the fitted gains track the requested target before writing them back.
+  If the step misses by more than the configured tolerance, the autotune
+  reports the discrepancy in the log and aborts.</li>
+<li><strong><code>SAVE_CONFIG</code> writes the active PID profile.</strong> When the per-heater
+  profile system is in use, the gains land in whichever profile was last
+  loaded (or <code>default</code> if none was). To calibrate into a named profile
+  in one go, pass <code>PROFILE=&lt;name&gt;</code> to <code>PID_CALIBRATE</code> — see the
+  <a href="heater-pid-profiles.html">PID profiles</a> doc.</li>
+<li><strong>The <code>pid_v</code> velocity-form controller calibrates with the same
+  command.</strong> The fitted gains are valid for both positional (<code>control:
+  pid</code>) and velocity (<code>control: pid_v</code>) controllers; you can switch
+  between them after calibration without re-tuning. See
+  <a href="heater-pid-velocity.html">heater-pid-velocity</a>.</li>
+</ul>
+<h2 id="credits">Credits<a class="headerlink" href="#credits" title="Permanent link">&para;</a></h2>
+<p>Based on the adaptive-relay autotune work from the Kalico community
+(Dan Sorensen, drawing on the Taysom &amp; Sorensen iterative method),
+imported and re-derived against the current Klipper <code>pid_calibrate</code>
+shape. The verification heat test, the <code>TOLERANCE</code> parameter, and the
+<code>WRITE_FILE</code> trace dump are part of the same work.</p>
 
               
             </article>

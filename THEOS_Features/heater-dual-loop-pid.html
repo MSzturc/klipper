@@ -13,7 +13,7 @@
     
     
       
-        <title>THEOS Klipper Fork - Klipper documentation</title>
+        <title>Dual-Loop PID - Klipper documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#theos-klipper-fork" class="md-skip">
+        <a href="#dual-loop-pid" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              THEOS Klipper Fork
+              Dual-Loop PID
             
           </span>
         </div>
@@ -1342,8 +1342,63 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#fork-specific-features" class="md-nav__link">
-    Fork-specific features
+  <a href="#what-this-is" class="md-nav__link">
+    What this is
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-this" class="md-nav__link">
+    When to use this
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    Configuration
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#minimal-example" class="md-nav__link">
+    Minimal example
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#calibration" class="md-nav__link">
+    Calibration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#g-code-commands" class="md-nav__link">
+    G-code commands
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-to-know" class="md-nav__link">
+    Things to know
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#credits" class="md-nav__link">
+    Credits
   </a>
   
 </li>
@@ -1360,38 +1415,190 @@
             <article class="md-content__inner md-typeset">
               
                 
-<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/README.md" title="Edit this page" class="md-content__button md-icon">
+<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/heater-dual-loop-pid.md" title="Edit this page" class="md-content__button md-icon">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z"/></svg>
 </a>
 
 
-<h1 id="theos-klipper-fork">THEOS Klipper Fork<a class="headerlink" href="#theos-klipper-fork" title="Permanent link">&para;</a></h1>
-<p>A fork of <a href="https://www.klipper3d.org/">Klipper</a> maintained by Matt The Printing Nerd, bundling additional features used by the <a href="https://github.com/MSzturc/THEOS">THEOS</a> printer operating system on top of stock Klipper.</p>
-<p>The core Klipper experience is unchanged: if you already run Klipper, everything you know still applies. Stock documentation at <a href="https://www.klipper3d.org/">klipper3d.org</a> remains authoritative for installation, kinematics, tuning, and everything not listed below.</p>
-<h2 id="fork-specific-features">Fork-specific features<a class="headerlink" href="#fork-specific-features" title="Permanent link">&para;</a></h2>
+<h1 id="dual-loop-pid">Dual-Loop PID<a class="headerlink" href="#dual-loop-pid" title="Permanent link">&para;</a></h1>
+<h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
+<p>A standard PID heater controls one sensor and one heater element. That
+works for nozzles, beds, and chambers where a single thermistor sees
+the temperature you actually care about. It breaks down for hardware
+where the heater you're driving and the temperature you're regulating
+are separated by significant thermal lag — for instance, a heatbreak
+heater (cartridge near the heat-block) where the <strong>load</strong> sensor sits
+on the heat-block surface and the <strong>element</strong> sensor sits inside the
+cartridge body.</p>
+<p>Driving such a system with a single PID loop forces a compromise: gains
+fast enough to respond to load disturbances will swing the cartridge
+through dangerous temperatures; gains slow enough to protect the
+cartridge can't reject load steps in time.</p>
+<p>This fork adds a <strong>dual-loop PID controller</strong> (<code>control: dual_loop_pid</code>)
+that runs two cascaded PID loops. The outer loop reads the primary
+(load) sensor and produces a temperature setpoint for the inner loop.
+The inner loop reads the secondary (element) sensor and runs a fast PID
+that drives the heater PWM, clamped at a configurable hard ceiling
+(<code>inner_max_temp</code>) so the element can never exceed its rated
+temperature.</p>
+<h2 id="when-to-use-this">When to use this<a class="headerlink" href="#when-to-use-this" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="sensorless_homing.html"><strong>Sensorless Homing</strong></a> — StallGuard-based homing with per-rail <code>home_current</code>, <code>min_home_dist</code>, and <code>homing_accel</code>; guaranteed post-home current restore; multi-stepper-per-rail current swap. Based on work by Brandon Nance, Bea Nance, Rogerio Goncalves, and Zeanon on Kalico, re-derived on the current Klipper base.</li>
-<li><a href="reset_velocity_limit.html"><strong><code>RESET_VELOCITY_LIMIT</code> G-code</strong></a> — restores <code>max_velocity</code>, <code>max_accel</code>, <code>square_corner_velocity</code>, and <code>minimum_cruise_ratio</code> to their configured values in one call, undoing any runtime <code>SET_VELOCITY_LIMIT</code> / <code>M204</code> override. Based on Kalico PR #472 by Matt Szturc.</li>
-<li><a href="tmc_drivers.html"><strong>TMC Drivers</strong></a> — motor-data-driven autotuning of chopper/PWM/hysteresis/StallGuard/CoolStep, per-stepper low-noise homing profile, TMC5160 driver_cs and short_conf, TMC2240 driver_cs / current_range / mandatory rref, mandatory sense_resistor, stepstick lookup table. Combines Klipper3d PR #6644 (Honest Brothers), Kalico PRs #382/#444/#525/#556/#613, and original autotuning work.</li>
-<li><a href="configparser_extensions.html"><strong>ConfigParser Extensions</strong></a> — variable interpolation (<code>${section.option}</code>), arithmetic evaluation with <code>min</code>/<code>max</code>/<code>abs</code>/<code>round</code>, default values (<code>:default</code>, <code>:None</code>), printer.cfg-overrides-sub-configs semantics, conditional includes, variable references in <code>[include]</code> paths, recursive subfolder globs, escape syntax (<code>\${literal}</code>), and the <code>RELOAD_GCODE_MACROS</code> G-code. Based on Kalico PRs #448/#482/#753 by Frank Tackitt and original work by Matt Szturc.</li>
-<li><a href="fan_control.html"><strong>Fan Control</strong></a> — <code>min_power</code> duty floor and <code>power</code> status key for actual PWM duty; <code>initial_speed</code> for at-startup fan command; <code>control: curve</code> for <code>[temperature_fan]</code> with point-list interpolation and heating/cooling hysteresis; optional short <code>id:</code> alias for <code>SET_FAN_SPEED</code> on <code>[fan_generic]</code>; hardware-PWM shutdown handling and kick-start last-value reset. Based on Kalico PRs #44/#193/#433/#436/#466/#819 by Kubaracek, Zeanon, Frédéric Beaucamp, NokkOnEffect, and Rogerio Goncalves, plus original work by Matt Szturc.</li>
-<li><a href="heater-pid-autotune.html"><strong>PID Autotune (Adaptive Relay)</strong></a> — <code>PID_CALIBRATE</code> rewritten on the Taysom &amp; Sorensen iterative method with amplitude-based convergence and a verification heat-up; better suited to high-thermal-mass beds and chamber heaters than the stock single-cycle Åström-Hägglund tune. Based on Kalico PR #62 by Dan Sorensen.</li>
-<li><a href="heater-pid-velocity.html"><strong>Velocity-Form PID</strong></a> — <code>control: pid_v</code> selects a velocity-form PID alternative to the positional controller, with <code>SET_HEATER_PID</code> for runtime Kp/Ki/Kd retuning on either algorithm. Based on Kalico PR #47 by Dans98 and PRs #35/#98 for the <code>SET_HEATER_PID</code> command.</li>
-<li><a href="heater-pid-profiles.html"><strong>PID Profiles</strong></a> — per-heater named profiles for PID/PID-velocity/dual-loop gains and <code>smooth_time</code>, with <code>PID_PROFILE LOAD/SAVE/REMOVE</code>, profile-aware <code>PID_CALIBRATE</code>, and <code>SET_SMOOTH_TIME</code>. Based on Kalico PR #162 by Vladimir Vukicevic with follow-up fixes by Tomas Petrlik.</li>
-<li><a href="heater-dual-loop-pid.html"><strong>Dual-Loop PID</strong></a> — <code>control: dual_loop_pid</code> cascades an outer (load) loop into an inner (element) loop with a hard <code>inner_max_temp</code> ceiling, two-pass calibration via <code>PID_CALIBRATE</code>. Based on Kalico PR #735 by Zeanon with follow-up fixes in PRs #758 / #809.</li>
-<li><a href="heater-mpc.html"><strong>Model Predictive Control (MPC)</strong></a> — <code>control: mpc</code> model-predictive heater controller with <code>MPC_CALIBRATE</code> and live <code>MPC_SET</code> tuning, fan-tracking via <code>fan_ambient_transfer</code> breakpoints, filament-cooling load with <code>filament_diameter</code>/<code>density</code>/<code>heat_capacity</code>, virtual <code>mpc_block_temperature</code> and <code>mpc_ambient_temperature</code> sensors. Based on Lasse Dalegaard's Klipper-MPC implementation with calibration, live-tuning, and virtual-sensor extensions from Kalico PRs #447/#468/#517/#555/#708/#732/#775/#819.</li>
-<li><a href="heater-cold-extrude.html"><strong>Cold Extrude</strong></a> — Marlin-compatible <code>M302</code> and Klipper-native <code>COLD_EXTRUDE</code> for runtime override of <code>min_extrude_temp</code>, with a session-only enable flag and a persisted threshold update. Based on Kalico PR #750 by Zeanon, with the dual-sensor heater follow-up in PR #766.</li>
-<li><a href="heater-diagnostics.html"><strong>Heater Diagnostics</strong></a> — ADC out-of-range shutdowns now name the offending heater and report its <code>last_temp</code> against the configured <code>min_temp</code>/<code>max_temp</code>; <code>PrinterHeaters.lookup_heater</code> accepts the full section name as shorthand. Based on Kalico PRs #182 and #252 by Rogerio Goncalves.</li>
-<li><a href="bdsensor.html"><strong>BDSensor</strong></a> — in-tree integration of the contactless inductive bed-distance probe; <code>[BDsensor]</code> config section, <code>BDSENSOR_*</code> G-code commands, automatic firmware build (<code>src-y += BD_sensor.c</code>), and <code>[board_pins]</code> alias resolution on <code>sda_pin</code> / <code>scl_pin</code> / <code>endstop_pin</code>. Based on work by Mark Yue, integrated from upstream <code>new</code> branch HEAD <code>8d0f833</code>.</li>
-<li><a href="use_probe_xy_offsets.html"><strong><code>use_probe_xy_offsets</code> Config Key</strong></a> — explicit per-section override for whether <code>ProbePointsHelper</code>-based probing applies the probe's X/Y offsets, exposed on <code>[bed_mesh]</code>, <code>[bed_tilt]</code>, <code>[z_tilt]</code>, <code>[quad_gantry_level]</code>, <code>[delta_calibrate]</code>, and <code>[screws_tilt_adjust]</code>. Based on Kalico PR #500 by Rogerio Goncalves.</li>
-<li><a href="plugin_system.html"><strong>Plugin System</strong></a> — load extras from <code>klippy/plugins/</code> without marking the install dirty; supports both single-file and package-style plugins. Based on Kalico PRs #82 and #100 by Brandon Nance, with package-directory support by Uku.</li>
-<li><a href="log_rotation.html"><strong>Log Rotation</strong></a> — <code>--rotate-log-at-restart</code> startup flag and <code>LOG_ROLLOVER</code> G-code for explicit log rollover, alongside upstream's midnight rotation. Based on Kalico PRs #181 and #498 by Rogerio Goncalves.</li>
-<li><a href="gcode_shell_command.html"><strong>gcode_shell_command</strong></a> — <code>[gcode_shell_command &lt;name&gt;]</code> config sections expose configured shell commands as <code>RUN_SHELL_COMMAND CMD=&lt;name&gt;</code> G-code with timeouts, parameter passthrough, and streamed output. Based on Eric Callahan's original extension, brought into Kalico via PRs #71 and #777 by Rogerio Goncalves and Clifford.</li>
-<li><a href="autoload_modules.html"><strong>Autoload Modules</strong></a> — <code>[force_move]</code>, <code>[respond]</code>, and <code>[exclude_object]</code> are loaded by default with <code>enable_&lt;name&gt;</code> opt-out keys, removing common boilerplate from <code>printer.cfg</code>. Based on Kalico PRs #135 and #306 by Rogerio Goncalves and the respond-default change.</li>
-<li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
-<li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
-<li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
+<li>A hotend or heatbreak heater where the heater element sits separated
+  from the load surface and you want firm protection against the
+  element overheating.</li>
+<li>An industrial-style heated chamber where the heating element is
+  ducted away from the chamber air and direct PID on the chamber
+  thermistor would either lag the load or overheat the element.</li>
+<li>A heated build plate with a separate heating mat below an aluminium
+  build surface, where the mat itself can run hotter than the surface
+  and you want both temperatures measured.</li>
 </ul>
+<p>You don't need this if a single sensor gives you a faithful read of the
+temperature you care about <em>and</em> the heater can't exceed its rated
+temperature in normal operation. Dual-loop adds tuning complexity; only
+reach for it when the single-loop approach is genuinely the wrong tool.</p>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>A dual-loop heater needs two sensors. Declare the second one as a
+plain <code>[temperature_sensor &lt;name&gt;]</code> and reference it from the heater
+section via <code>inner_sensor_name</code>.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>control</code></td>
+<td><code>pid</code></td>
+<td>Set to <code>dual_loop_pid</code> to enable cascaded control.</td>
+</tr>
+<tr>
+<td><code>inner_sensor_name</code></td>
+<td>unset</td>
+<td>Short name of the <code>[temperature_sensor]</code> section to use as the inner-loop (element) sensor.</td>
+</tr>
+<tr>
+<td><code>inner_max_temp</code></td>
+<td>required when <code>dual_loop_pid</code></td>
+<td>Hard ceiling on the element temperature in °C. The inner-loop PID treats this as its maximum setpoint regardless of what the outer loop requests.</td>
+</tr>
+<tr>
+<td><code>pid_Kp</code>, <code>pid_Ki</code>, <code>pid_Kd</code></td>
+<td>required</td>
+<td>Outer-loop (load) PID gains.</td>
+</tr>
+<tr>
+<td><code>inner_pid_kp</code>, <code>inner_pid_ki</code>, <code>inner_pid_kd</code></td>
+<td>required</td>
+<td>Inner-loop (element) PID gains.</td>
+</tr>
+<tr>
+<td><code>smooth_time</code></td>
+<td><code>1.0</code></td>
+<td>Derivative smoothing window for both loops.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="minimal-example">Minimal example<a class="headerlink" href="#minimal-example" title="Permanent link">&para;</a></h3>
+<p>A hotend with a heatbreak cartridge driving a separate hotblock thermistor:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[temperature_sensor hotblock]</span>
+<span class="na">sensor_type</span><span class="o">:</span><span class="w"> </span><span class="s">ATC Semitec 104GT-2</span>
+<span class="na">sensor_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PF5</span>
+<span class="na">min_temp</span><span class="o">:</span><span class="w"> </span><span class="s">0</span>
+<span class="na">max_temp</span><span class="o">:</span><span class="w"> </span><span class="s">350</span>
+
+<span class="k">[extruder]</span>
+<span class="na">heater_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PA2</span>
+<span class="na">sensor_type</span><span class="o">:</span><span class="w"> </span><span class="s">PT1000</span>
+<span class="na">sensor_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PF4</span>
+<span class="na">min_temp</span><span class="o">:</span><span class="w"> </span><span class="s">0</span>
+<span class="na">max_temp</span><span class="o">:</span><span class="w"> </span><span class="s">320</span>
+<span class="na">control</span><span class="o">:</span><span class="w"> </span><span class="s">dual_loop_pid</span>
+<span class="na">inner_sensor_name</span><span class="o">:</span><span class="w"> </span><span class="s">hotblock</span>
+<span class="na">inner_max_temp</span><span class="o">:</span><span class="w"> </span><span class="s">380</span>
+<span class="na">pid_Kp</span><span class="o">:</span><span class="w"> </span><span class="s">24.0</span>
+<span class="na">pid_Ki</span><span class="o">:</span><span class="w"> </span><span class="s">1.05</span>
+<span class="na">pid_Kd</span><span class="o">:</span><span class="w"> </span><span class="s">138.0</span>
+<span class="na">inner_pid_kp</span><span class="o">:</span><span class="w"> </span><span class="s">14.0</span>
+<span class="na">inner_pid_ki</span><span class="o">:</span><span class="w"> </span><span class="s">0.6</span>
+<span class="na">inner_pid_kd</span><span class="o">:</span><span class="w"> </span><span class="s">60.0</span>
+</code></pre></div>
+
+<p>In the example, the load thermistor is the in-nozzle PT1000; the
+heatbreak cartridge has a separate thermistor wired to a generic ADC
+pin. The inner loop holds the cartridge below 380 °C even if the outer
+loop ever asks for more.</p>
+<h2 id="calibration">Calibration<a class="headerlink" href="#calibration" title="Permanent link">&para;</a></h2>
+<p>Dual-loop tuning is a two-pass version of standard PID tuning. The
+<code>PID_CALIBRATE</code> workflow handles both passes in one command.</p>
+<ol>
+<li>Cold-start the heater. Both sensors should read room temperature.</li>
+<li>Run <code>PID_CALIBRATE HEATER=&lt;name&gt; TARGET=&lt;load_setpoint&gt;</code>. The
+   autotune first tunes the inner (element) loop with the outer loop
+   pinned, then tunes the outer (load) loop with the inner loop active.
+   The whole sequence takes 15–40 minutes depending on thermal mass.</li>
+<li>The autotune writes both <code>pid_Kp/Ki/Kd</code> (outer) and
+   <code>inner_pid_kp/ki/kd</code> (inner) into the active profile, plus a
+   <code>/tmp/heattest.csv</code> (outer pass) and <code>/tmp/heattest_secondary.csv</code>
+   (inner pass) trace.</li>
+<li>Run <code>SAVE_CONFIG</code> to persist.</li>
+</ol>
+<p>If the inner loop fails to converge, check that <code>inner_max_temp</code> is at
+least 30 °C above your typical load setpoint and that the inner sensor
+is electrically clean. The autotune raises an explicit error if the
+inner loop's relay swing would clip against <code>inner_max_temp</code>.</p>
+<p>Per-condition profiles (e.g. one tune for a closed enclosure, another
+for an open machine) work the same way as for single-loop heaters —
+see <a href="heater-pid-profiles.html">PID profiles</a>. Dual-loop profiles must
+include both inner and outer gain triples.</p>
+<h2 id="g-code-commands">G-code commands<a class="headerlink" href="#g-code-commands" title="Permanent link">&para;</a></h2>
+<p>The runtime command surface is shared with the regular PID controllers:</p>
+<ul>
+<li><a href="heater-pid-autotune.html"><code>PID_CALIBRATE</code></a> extended to handle the
+  two-pass dual-loop calibration when the heater's <code>control</code> is
+  <code>dual_loop_pid</code>.</li>
+<li><a href="heater-pid-profiles.html"><code>PID_PROFILE</code></a> handles dual-loop profiles
+  the same as positional or velocity-form profiles; profiles that store
+  <code>dual_loop_pid</code> gains carry both inner and outer triples.</li>
+</ul>
+<p><code>SET_HEATER_PID</code> is <strong>not</strong> available for dual-loop heaters — the
+controller has six independent gains that don't map cleanly to the
+single-triple <code>KP/KI/KD</code> parameter set. Use <code>PID_PROFILE LOAD</code> against a
+pre-tuned profile to retune live, or <code>SAVE_CONFIG</code> after a fresh
+<code>PID_CALIBRATE</code> run.</p>
+<h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong><code>inner_max_temp</code> is a safety wall, not a setpoint hint.</strong> Pick it
+  with margin above your highest expected load setpoint (typically
+  <code>target_temp + 50–80 °C</code>). The inner loop will saturate at the wall
+  during a cold-start ramp; that's intended.</li>
+<li><strong>Both sensors must be configured before the heater section.</strong> Klipper
+  loads <code>[temperature_sensor]</code> sections during heater setup and binds
+  them by short name — a typo in <code>inner_sensor_name</code> produces a config
+  error at startup.</li>
+<li><strong>Calibrate inner first, then outer.</strong> The autotune does this
+  automatically. If you tune the gains by hand, follow the same order:
+  the outer loop's response depends on the inner loop already being
+  stable.</li>
+<li><strong>Cold-extrude / <code>min_extrude_temp</code> is enforced on the load sensor.</strong>
+  The dual-loop heater honours <code>min_extrude_temp</code> against the smoothed
+  primary (load) temperature, exactly like a single-sensor heater. The
+  inner-sensor reading is irrelevant to the extrusion interlock.</li>
+<li><strong>Profile-stored dual-loop gains include <code>inner_pid_*</code> keys.</strong> When
+  running <code>PID_PROFILE SAVE</code> against a dual-loop heater, the saved
+  profile section includes both gain triples; profiles tuned for
+  positional or velocity controllers cannot be loaded into a dual-loop
+  heater.</li>
+</ul>
+<h2 id="credits">Credits<a class="headerlink" href="#credits" title="Permanent link">&para;</a></h2>
+<p>Based on the dual-loop PID controller from the Kalico community
+(Zeanon, KalicoCrew PR #735), imported and re-derived against the
+current Klipper heater control class layout. Companion bugfixes for
+the secondary heat-test handling and output filename consistency
+(KalicoCrew PRs #758 and #809) are folded into the same change.</p>
 
               
             </article>

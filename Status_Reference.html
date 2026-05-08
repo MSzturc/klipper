@@ -2380,8 +2380,15 @@ object:</p>
   the given heater.</li>
 <li><code>power</code>: The last setting of the PWM pin (a value between 0.0 and
   1.0) associated with the heater.</li>
+<li><code>pid_profile</code>: Name of the currently loaded PID profile.</li>
 <li><code>can_extrude</code>: If extruder can extrude (defined by <code>min_extrude_temp</code>),
   available only for <a href="Config_Reference.html#extruder">extruder</a></li>
+<li><code>control_stats</code>: Algorithm-specific runtime state. Only present when
+  the heater's control algorithm exposes one. For <code>control: mpc</code> it
+  reports <code>temp_block</code>, <code>temp_sensor</code>, <code>temp_ambient</code> (the three
+  internal model states), <code>power</code> (modelled heater power in W),
+  <code>loss_ambient</code> and <code>loss_filament</code> (modelled heat losses in W),
+  and <code>filament_temp</code> (the configured filament-temperature source).</li>
 </ul>
 <h2 id="heaters">heaters<a class="headerlink" href="#heaters" title="Permanent link">&para;</a></h2>
 <p>The following information is available in the <code>heaters</code> object (this

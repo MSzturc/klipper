@@ -13,7 +13,7 @@
     
     
       
-        <title>THEOS Klipper Fork - Klipper documentation</title>
+        <title>PID Profiles - Klipper documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#theos-klipper-fork" class="md-skip">
+        <a href="#pid-profiles" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              THEOS Klipper Fork
+              PID Profiles
             
           </span>
         </div>
@@ -1342,8 +1342,97 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#fork-specific-features" class="md-nav__link">
-    Fork-specific features
+  <a href="#what-this-is" class="md-nav__link">
+    What this is
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#when-to-use-this" class="md-nav__link">
+    When to use this
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    Configuration
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#heater-section-existing" class="md-nav__link">
+    Heater section (existing)
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pid_profile-heater-profile_name" class="md-nav__link">
+    [pid_profile &lt;heater&gt; &lt;profile_name&gt;]
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minimal-example" class="md-nav__link">
+    Minimal example
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#g-code-commands" class="md-nav__link">
+    G-code commands
+  </a>
+  
+    <nav class="md-nav" aria-label="G-code commands">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pid_profile" class="md-nav__link">
+    PID_PROFILE
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pid_calibrate-with-profiles" class="md-nav__link">
+    PID_CALIBRATE with profiles
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set_smooth_time" class="md-nav__link">
+    SET_SMOOTH_TIME
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-to-know" class="md-nav__link">
+    Things to know
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#credits" class="md-nav__link">
+    Credits
   </a>
   
 </li>
@@ -1360,38 +1449,263 @@
             <article class="md-content__inner md-typeset">
               
                 
-<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/README.md" title="Edit this page" class="md-content__button md-icon">
+<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/heater-pid-profiles.md" title="Edit this page" class="md-content__button md-icon">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z"/></svg>
 </a>
 
 
-<h1 id="theos-klipper-fork">THEOS Klipper Fork<a class="headerlink" href="#theos-klipper-fork" title="Permanent link">&para;</a></h1>
-<p>A fork of <a href="https://www.klipper3d.org/">Klipper</a> maintained by Matt The Printing Nerd, bundling additional features used by the <a href="https://github.com/MSzturc/THEOS">THEOS</a> printer operating system on top of stock Klipper.</p>
-<p>The core Klipper experience is unchanged: if you already run Klipper, everything you know still applies. Stock documentation at <a href="https://www.klipper3d.org/">klipper3d.org</a> remains authoritative for installation, kinematics, tuning, and everything not listed below.</p>
-<h2 id="fork-specific-features">Fork-specific features<a class="headerlink" href="#fork-specific-features" title="Permanent link">&para;</a></h2>
+<h1 id="pid-profiles">PID Profiles<a class="headerlink" href="#pid-profiles" title="Permanent link">&para;</a></h1>
+<h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
+<p>Stock Klipper stores one PID gain set per heater, hardcoded in the
+heater's config section. To run different gains for different conditions
+— part-fan on vs. off, ABS chamber temperature vs. PETG, a thinner
+print-bed sheet vs. the stock one — you'd edit the config and restart
+Klipper, or live-tune with <code>SET_HEATER_PID</code> and lose the gains on
+restart.</p>
+<p>This fork adds a <strong>per-heater profile system</strong>. Each heater section can
+hold any number of named profiles in dedicated <code>[pid_profile &lt;heater&gt;
+&lt;name&gt;]</code> config sections; one profile is active at a time and can be
+swapped at runtime. Calibrating, saving, loading, and removing profiles
+all work via G-code, with <code>SAVE_CONFIG</code> persisting the result.</p>
+<p>The profile system also exposes per-profile control of the derivative
+smoothing window (<code>smooth_time</code>) so a high-mass heater that needs heavy
+smoothing can be tuned independently of a hotend that does not.</p>
+<h2 id="when-to-use-this">When to use this<a class="headerlink" href="#when-to-use-this" title="Permanent link">&para;</a></h2>
 <ul>
-<li><a href="sensorless_homing.html"><strong>Sensorless Homing</strong></a> — StallGuard-based homing with per-rail <code>home_current</code>, <code>min_home_dist</code>, and <code>homing_accel</code>; guaranteed post-home current restore; multi-stepper-per-rail current swap. Based on work by Brandon Nance, Bea Nance, Rogerio Goncalves, and Zeanon on Kalico, re-derived on the current Klipper base.</li>
-<li><a href="reset_velocity_limit.html"><strong><code>RESET_VELOCITY_LIMIT</code> G-code</strong></a> — restores <code>max_velocity</code>, <code>max_accel</code>, <code>square_corner_velocity</code>, and <code>minimum_cruise_ratio</code> to their configured values in one call, undoing any runtime <code>SET_VELOCITY_LIMIT</code> / <code>M204</code> override. Based on Kalico PR #472 by Matt Szturc.</li>
-<li><a href="tmc_drivers.html"><strong>TMC Drivers</strong></a> — motor-data-driven autotuning of chopper/PWM/hysteresis/StallGuard/CoolStep, per-stepper low-noise homing profile, TMC5160 driver_cs and short_conf, TMC2240 driver_cs / current_range / mandatory rref, mandatory sense_resistor, stepstick lookup table. Combines Klipper3d PR #6644 (Honest Brothers), Kalico PRs #382/#444/#525/#556/#613, and original autotuning work.</li>
-<li><a href="configparser_extensions.html"><strong>ConfigParser Extensions</strong></a> — variable interpolation (<code>${section.option}</code>), arithmetic evaluation with <code>min</code>/<code>max</code>/<code>abs</code>/<code>round</code>, default values (<code>:default</code>, <code>:None</code>), printer.cfg-overrides-sub-configs semantics, conditional includes, variable references in <code>[include]</code> paths, recursive subfolder globs, escape syntax (<code>\${literal}</code>), and the <code>RELOAD_GCODE_MACROS</code> G-code. Based on Kalico PRs #448/#482/#753 by Frank Tackitt and original work by Matt Szturc.</li>
-<li><a href="fan_control.html"><strong>Fan Control</strong></a> — <code>min_power</code> duty floor and <code>power</code> status key for actual PWM duty; <code>initial_speed</code> for at-startup fan command; <code>control: curve</code> for <code>[temperature_fan]</code> with point-list interpolation and heating/cooling hysteresis; optional short <code>id:</code> alias for <code>SET_FAN_SPEED</code> on <code>[fan_generic]</code>; hardware-PWM shutdown handling and kick-start last-value reset. Based on Kalico PRs #44/#193/#433/#436/#466/#819 by Kubaracek, Zeanon, Frédéric Beaucamp, NokkOnEffect, and Rogerio Goncalves, plus original work by Matt Szturc.</li>
-<li><a href="heater-pid-autotune.html"><strong>PID Autotune (Adaptive Relay)</strong></a> — <code>PID_CALIBRATE</code> rewritten on the Taysom &amp; Sorensen iterative method with amplitude-based convergence and a verification heat-up; better suited to high-thermal-mass beds and chamber heaters than the stock single-cycle Åström-Hägglund tune. Based on Kalico PR #62 by Dan Sorensen.</li>
-<li><a href="heater-pid-velocity.html"><strong>Velocity-Form PID</strong></a> — <code>control: pid_v</code> selects a velocity-form PID alternative to the positional controller, with <code>SET_HEATER_PID</code> for runtime Kp/Ki/Kd retuning on either algorithm. Based on Kalico PR #47 by Dans98 and PRs #35/#98 for the <code>SET_HEATER_PID</code> command.</li>
-<li><a href="heater-pid-profiles.html"><strong>PID Profiles</strong></a> — per-heater named profiles for PID/PID-velocity/dual-loop gains and <code>smooth_time</code>, with <code>PID_PROFILE LOAD/SAVE/REMOVE</code>, profile-aware <code>PID_CALIBRATE</code>, and <code>SET_SMOOTH_TIME</code>. Based on Kalico PR #162 by Vladimir Vukicevic with follow-up fixes by Tomas Petrlik.</li>
-<li><a href="heater-dual-loop-pid.html"><strong>Dual-Loop PID</strong></a> — <code>control: dual_loop_pid</code> cascades an outer (load) loop into an inner (element) loop with a hard <code>inner_max_temp</code> ceiling, two-pass calibration via <code>PID_CALIBRATE</code>. Based on Kalico PR #735 by Zeanon with follow-up fixes in PRs #758 / #809.</li>
-<li><a href="heater-mpc.html"><strong>Model Predictive Control (MPC)</strong></a> — <code>control: mpc</code> model-predictive heater controller with <code>MPC_CALIBRATE</code> and live <code>MPC_SET</code> tuning, fan-tracking via <code>fan_ambient_transfer</code> breakpoints, filament-cooling load with <code>filament_diameter</code>/<code>density</code>/<code>heat_capacity</code>, virtual <code>mpc_block_temperature</code> and <code>mpc_ambient_temperature</code> sensors. Based on Lasse Dalegaard's Klipper-MPC implementation with calibration, live-tuning, and virtual-sensor extensions from Kalico PRs #447/#468/#517/#555/#708/#732/#775/#819.</li>
-<li><a href="heater-cold-extrude.html"><strong>Cold Extrude</strong></a> — Marlin-compatible <code>M302</code> and Klipper-native <code>COLD_EXTRUDE</code> for runtime override of <code>min_extrude_temp</code>, with a session-only enable flag and a persisted threshold update. Based on Kalico PR #750 by Zeanon, with the dual-sensor heater follow-up in PR #766.</li>
-<li><a href="heater-diagnostics.html"><strong>Heater Diagnostics</strong></a> — ADC out-of-range shutdowns now name the offending heater and report its <code>last_temp</code> against the configured <code>min_temp</code>/<code>max_temp</code>; <code>PrinterHeaters.lookup_heater</code> accepts the full section name as shorthand. Based on Kalico PRs #182 and #252 by Rogerio Goncalves.</li>
-<li><a href="bdsensor.html"><strong>BDSensor</strong></a> — in-tree integration of the contactless inductive bed-distance probe; <code>[BDsensor]</code> config section, <code>BDSENSOR_*</code> G-code commands, automatic firmware build (<code>src-y += BD_sensor.c</code>), and <code>[board_pins]</code> alias resolution on <code>sda_pin</code> / <code>scl_pin</code> / <code>endstop_pin</code>. Based on work by Mark Yue, integrated from upstream <code>new</code> branch HEAD <code>8d0f833</code>.</li>
-<li><a href="use_probe_xy_offsets.html"><strong><code>use_probe_xy_offsets</code> Config Key</strong></a> — explicit per-section override for whether <code>ProbePointsHelper</code>-based probing applies the probe's X/Y offsets, exposed on <code>[bed_mesh]</code>, <code>[bed_tilt]</code>, <code>[z_tilt]</code>, <code>[quad_gantry_level]</code>, <code>[delta_calibrate]</code>, and <code>[screws_tilt_adjust]</code>. Based on Kalico PR #500 by Rogerio Goncalves.</li>
-<li><a href="plugin_system.html"><strong>Plugin System</strong></a> — load extras from <code>klippy/plugins/</code> without marking the install dirty; supports both single-file and package-style plugins. Based on Kalico PRs #82 and #100 by Brandon Nance, with package-directory support by Uku.</li>
-<li><a href="log_rotation.html"><strong>Log Rotation</strong></a> — <code>--rotate-log-at-restart</code> startup flag and <code>LOG_ROLLOVER</code> G-code for explicit log rollover, alongside upstream's midnight rotation. Based on Kalico PRs #181 and #498 by Rogerio Goncalves.</li>
-<li><a href="gcode_shell_command.html"><strong>gcode_shell_command</strong></a> — <code>[gcode_shell_command &lt;name&gt;]</code> config sections expose configured shell commands as <code>RUN_SHELL_COMMAND CMD=&lt;name&gt;</code> G-code with timeouts, parameter passthrough, and streamed output. Based on Eric Callahan's original extension, brought into Kalico via PRs #71 and #777 by Rogerio Goncalves and Clifford.</li>
-<li><a href="autoload_modules.html"><strong>Autoload Modules</strong></a> — <code>[force_move]</code>, <code>[respond]</code>, and <code>[exclude_object]</code> are loaded by default with <code>enable_&lt;name&gt;</code> opt-out keys, removing common boilerplate from <code>printer.cfg</code>. Based on Kalico PRs #135 and #306 by Rogerio Goncalves and the respond-default change.</li>
-<li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
-<li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
-<li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
+<li>You print materials with very different heater requirements (PLA vs.
+  ABS, with vs. without an enclosure) and want a one-line gcode switch
+  between tuned gain sets.</li>
+<li>You added or replaced a heated bed surface (PEI vs. flexible, magnetic
+  swap, glass) and want a profile per surface.</li>
+<li>You're running with and without a part-cooling fan, and the heater
+  needs different gains in each regime.</li>
+<li>You want a calibration record. Each profile carries its own <code>pid_Kp</code>/
+  <code>Ki</code>/<code>Kd</code>, <code>smooth_time</code>, and <code>pid_target</code>/<code>pid_tolerance</code>, so you can
+  trace which conditions a profile was tuned for.</li>
 </ul>
+<p>You don't need profiles if a single PID tune is good enough for every
+condition you care about. The default profile is created automatically
+from the heater's existing <code>pid_Kp</code>/<code>Ki</code>/<code>Kd</code> config keys, so existing
+configs keep working.</p>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>The heater's main config section continues to declare its gains as
+before. Extra profiles are added as sibling <code>[pid_profile &lt;heater_short&gt;
+&lt;profile_name&gt;]</code> sections.</p>
+<h3 id="heater-section-existing">Heater section (existing)<a class="headerlink" href="#heater-section-existing" title="Permanent link">&para;</a></h3>
+<p>Treat the heater section as the implicit <code>default</code> profile. The
+existing keys stay valid:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pid_Kp</code>, <code>pid_Ki</code>, <code>pid_Kd</code></td>
+<td>Default-profile gains.</td>
+</tr>
+<tr>
+<td><code>pid_target</code></td>
+<td>Optional target to record against the default profile.</td>
+</tr>
+<tr>
+<td><code>pid_tolerance</code></td>
+<td>Optional convergence tolerance recorded with the default profile.</td>
+</tr>
+<tr>
+<td><code>smooth_time</code></td>
+<td>Optional derivative smoothing window in seconds.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="pid_profile-heater-profile_name"><code>[pid_profile &lt;heater&gt; &lt;profile_name&gt;]</code><a class="headerlink" href="#pid_profile-heater-profile_name" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pid_version</code></td>
+<td><code>1</code></td>
+<td>Profile schema version. Bumped when a future profile change is incompatible.</td>
+</tr>
+<tr>
+<td><code>control</code></td>
+<td><code>pid</code></td>
+<td>Algorithm for this profile: <code>pid</code>, <code>pid_v</code>, or <code>dual_loop_pid</code>.</td>
+</tr>
+<tr>
+<td><code>pid_Kp</code>, <code>pid_Ki</code>, <code>pid_Kd</code></td>
+<td>required</td>
+<td>Profile gains.</td>
+</tr>
+<tr>
+<td><code>pid_target</code></td>
+<td>unset</td>
+<td>Calibration target temperature recorded with the profile.</td>
+</tr>
+<tr>
+<td><code>pid_tolerance</code></td>
+<td>unset</td>
+<td>Convergence tolerance recorded with the profile.</td>
+</tr>
+<tr>
+<td><code>smooth_time</code></td>
+<td>inherits heater</td>
+<td>Per-profile smoothing window.</td>
+</tr>
+<tr>
+<td><code>inner_pid_kp</code>, <code>inner_pid_ki</code>, <code>inner_pid_kd</code></td>
+<td>required for <code>dual_loop_pid</code></td>
+<td>Inner-loop gains for dual-loop profiles only.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="minimal-example">Minimal example<a class="headerlink" href="#minimal-example" title="Permanent link">&para;</a></h3>
+<p>A bed with two profiles — quiet (slow ramp, gentler gains) and
+aggressive (fast ramp, accepts overshoot):</p>
+<div class="highlight"><pre><span></span><code><span class="k">[heater_bed]</span>
+<span class="na">heater_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PA1</span>
+<span class="na">sensor_type</span><span class="o">:</span><span class="w"> </span><span class="s">ATC Semitec 104GT-2</span>
+<span class="na">sensor_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PF3</span>
+<span class="na">control</span><span class="o">:</span><span class="w"> </span><span class="s">pid</span>
+<span class="na">pid_Kp</span><span class="o">:</span><span class="w"> </span><span class="s">54.0</span>
+<span class="na">pid_Ki</span><span class="o">:</span><span class="w"> </span><span class="s">1.20</span>
+<span class="na">pid_Kd</span><span class="o">:</span><span class="w"> </span><span class="s">600</span>
+<span class="na">min_temp</span><span class="o">:</span><span class="w"> </span><span class="s">0</span>
+<span class="na">max_temp</span><span class="o">:</span><span class="w"> </span><span class="s">110</span>
+
+<span class="k">[pid_profile heater_bed aggressive]</span>
+<span class="na">pid_Kp</span><span class="o">:</span><span class="w"> </span><span class="s">72.0</span>
+<span class="na">pid_Ki</span><span class="o">:</span><span class="w"> </span><span class="s">2.10</span>
+<span class="na">pid_Kd</span><span class="o">:</span><span class="w"> </span><span class="s">480</span>
+<span class="na">smooth_time</span><span class="o">:</span><span class="w"> </span><span class="s">0.8</span>
+</code></pre></div>
+
+<p>The default profile is the heater section itself; the <code>aggressive</code>
+profile lives in its own section and is loaded via
+<code>PID_PROFILE LOAD=aggressive HEATER=heater_bed</code>.</p>
+<h2 id="g-code-commands">G-code commands<a class="headerlink" href="#g-code-commands" title="Permanent link">&para;</a></h2>
+<h3 id="pid_profile"><code>PID_PROFILE</code><a class="headerlink" href="#pid_profile" title="Permanent link">&para;</a></h3>
+<p>Multiplexed by <code>HEATER</code>; the action is selected by which optional
+parameter is set. Exactly one of <code>LOAD</code>, <code>SAVE</code>, <code>REMOVE</code> is required.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HEATER</code></td>
+<td>Section short name of the heater (e.g. <code>extruder</code>, <code>heater_bed</code>).</td>
+</tr>
+<tr>
+<td><code>LOAD</code></td>
+<td>Profile name to switch the heater to. Activates the named profile's gains immediately.</td>
+</tr>
+<tr>
+<td><code>SAVE</code></td>
+<td>Profile name to write the heater's <em>current</em> gains into. If the profile didn't exist, it is created; if it did, it is overwritten. Use <code>SAVE_CONFIG</code> afterwards to persist.</td>
+</tr>
+<tr>
+<td><code>REMOVE</code></td>
+<td>Profile name to delete. Refuses to delete the active profile.</td>
+</tr>
+<tr>
+<td><code>KEEP_TARGET</code></td>
+<td>When loading, set to <code>1</code> to keep the heater's current target temperature (default <code>0</code> resets target to 0).</td>
+</tr>
+<tr>
+<td><code>LOAD_CLEAN</code></td>
+<td>When loading, set to <code>1</code> to reset the controller's internal state (integral term, last derivative). Default <code>0</code> carries state across the swap.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>PID_PROFILE LOAD=aggressive HEATER=heater_bed
+PID_PROFILE SAVE=fan_full HEATER=extruder
+PID_PROFILE REMOVE=old_petg HEATER=heater_bed
+</code></pre></div>
+
+<p>A typical sequence: tune with <code>PID_CALIBRATE</code>, save the result into a
+named profile, switch back to default for normal printing, load the
+named profile only when the relevant condition holds.</p>
+<h3 id="pid_calibrate-with-profiles"><code>PID_CALIBRATE</code> with profiles<a class="headerlink" href="#pid_calibrate-with-profiles" title="Permanent link">&para;</a></h3>
+<p><code>PID_CALIBRATE</code> accepts an optional <code>PROFILE=&lt;name&gt;</code> parameter. When
+set, the calibrated gains are written into that named profile instead of
+the active one. Useful for tuning a profile from scratch:</p>
+<div class="highlight"><pre><span></span><code>PID_CALIBRATE HEATER=heater_bed TARGET=80 PROFILE=PETG
+SAVE_CONFIG
+</code></pre></div>
+
+<p>The above runs the autotune and writes the result straight into a new
+<code>[pid_profile heater_bed PETG]</code> section; no need to load the profile
+first.</p>
+<h3 id="set_smooth_time"><code>SET_SMOOTH_TIME</code><a class="headerlink" href="#set_smooth_time" title="Permanent link">&para;</a></h3>
+<p>Adjust the derivative smoothing window of the active profile, optionally
+saving back to the profile.</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HEATER</code></td>
+<td>Section short name of the heater.</td>
+</tr>
+<tr>
+<td><code>SMOOTH_TIME</code></td>
+<td>New smoothing window in seconds. Omit to reset to the heater's configured <code>smooth_time</code>.</td>
+</tr>
+<tr>
+<td><code>SAVE_TO_PROFILE</code></td>
+<td>Set to <code>1</code> to write the new value into the active profile (still requires <code>SAVE_CONFIG</code> to persist). Default <code>0</code> updates only the live controller.</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>SET_SMOOTH_TIME HEATER=heater_bed SMOOTH_TIME=1.2
+SET_SMOOTH_TIME HEATER=extruder SMOOTH_TIME=0.4 SAVE_TO_PROFILE=1
+</code></pre></div>
+
+<h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>The default profile is the heater section.</strong> No separate
+  <code>[pid_profile heater_bed default]</code> section is created — that profile
+  <em>is</em> the heater section. <code>PID_PROFILE LOAD=default HEATER=&lt;heater&gt;</code> switches
+  back to whatever gains are written in the heater section itself.</li>
+<li><strong><code>SAVE_CONFIG</code> is required after <code>PID_PROFILE SAVE</code> and after
+  <code>PID_CALIBRATE PROFILE=</code>.</strong> Without it, the new profile lives only
+  until restart.</li>
+<li><strong>Profile keys are case-insensitive on read.</strong> Older configs that
+  saved gains as <code>pid_Kp</code> (mixed case) keep working; the profile system
+  normalises to lowercase (<code>pid_kp</code>) when writing back.</li>
+<li><strong>Loading a profile preserves the integral state by default.</strong>
+  <code>LOAD_CLEAN=1</code> is useful when a stale integral from the previous
+  profile would push the new tune off-target on the first cycle —
+  typical when the heater has been idle for a while.</li>
+<li><strong><code>PID_PROFILE REMOVE</code> cannot delete the active profile.</strong> Switch to
+  another profile first (or <code>PID_PROFILE LOAD=default HEATER=&lt;heater&gt;</code>), then remove.</li>
+<li><strong><code>smooth_time</code> per profile changes derivative behaviour, not
+  scheduling.</strong> Klipper still samples and recomputes PWM at the
+  heater's native rate; <code>smooth_time</code> only widens the moving-average
+  window the derivative term reads from.</li>
+</ul>
+<h2 id="credits">Credits<a class="headerlink" href="#credits" title="Permanent link">&para;</a></h2>
+<p>Based on the per-heater PID-profile work from the Kalico community
+(profile system in PR #162 by Vladimir Vukicevic, with Tomas Petrlik's
+follow-up fixes), imported and re-derived against the current Klipper
+heater control class shape. The <code>PID_CALIBRATE PROFILE=</code> integration is
+part of the same port.</p>
 
               
             </article>

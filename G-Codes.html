@@ -1604,6 +1604,20 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cold_extrude" class="md-nav__link">
+    COLD_EXTRUDE
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set_smooth_time" class="md-nav__link">
+    SET_SMOOTH_TIME
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1919,6 +1933,33 @@
           <li class="md-nav__item">
   <a href="#pid_calibrate_1" class="md-nav__link">
     PID_CALIBRATE
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set_heater_pid" class="md-nav__link">
+    SET_HEATER_PID
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pid_profile" class="md-nav__link">
+    [pid_profile]
+  </a>
+  
+    <nav class="md-nav" aria-label="[pid_profile]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pid_profile_1" class="md-nav__link">
+    PID_PROFILE
   </a>
   
 </li>
@@ -3941,6 +3982,20 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#cold_extrude" class="md-nav__link">
+    COLD_EXTRUDE
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set_smooth_time" class="md-nav__link">
+    SET_SMOOTH_TIME
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -4256,6 +4311,33 @@
           <li class="md-nav__item">
   <a href="#pid_calibrate_1" class="md-nav__link">
     PID_CALIBRATE
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#set_heater_pid" class="md-nav__link">
+    SET_HEATER_PID
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pid_profile" class="md-nav__link">
+    [pid_profile]
+  </a>
+  
+    <nav class="md-nav" aria-label="[pid_profile]">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pid_profile_1" class="md-nav__link">
+    PID_PROFILE
   </a>
   
 </li>
@@ -4943,6 +5025,7 @@ commands that one may enter into the OctoPrint terminal tab.</p>
   value</li>
 </ul>
 </li>
+<li>Enable cold extrusion: <code>M302 [T&lt;index&gt;] [P&lt;enable&gt;] [S&lt;min_extrude_temp&gt;]</code></li>
 <li>Set bed temperature: <code>M140 [S&lt;temperature&gt;]</code></li>
 <li>Set bed temperature and wait: <code>M190 S&lt;temperature&gt;</code><ul>
 <li>Note: M190 always waits for temperature to settle at requested
@@ -5622,6 +5705,21 @@ above the supplied MINIMUM and/or at or below the supplied MAXIMUM.</p>
 <p><code>SET_HEATER_TEMPERATURE HEATER=&lt;heater_name&gt;
 [TARGET=&lt;target_temperature&gt;]</code>: Sets the target temperature for a
 heater. If a target temperature is not supplied, the target is 0.</p>
+<h4 id="cold_extrude">COLD_EXTRUDE<a class="headerlink" href="#cold_extrude" title="Permanent link">&para;</a></h4>
+<p><code>COLD_EXTRUDE HEATER=&lt;heater_name&gt; [ENABLE=&lt;0|1&gt;]
+[MIN_EXTRUDE_TEMP=&lt;min_extrude_temp&gt;]</code>: Enables or disables cold
+extrusion on the specified heater. When <code>ENABLE=1</code>, the extruder
+moves are permitted regardless of temperature; when <code>ENABLE=0</code>, the
+configured <code>min_extrude_temp</code> is enforced. If <code>MIN_EXTRUDE_TEMP</code> is
+supplied, the threshold is updated for the current session and a
+<code>SAVE_CONFIG</code> will persist it. With no parameters, the current state
+is reported.</p>
+<h4 id="set_smooth_time">SET_SMOOTH_TIME<a class="headerlink" href="#set_smooth_time" title="Permanent link">&para;</a></h4>
+<p><code>SET_SMOOTH_TIME HEATER=&lt;heater_name&gt; [SMOOTH_TIME=&lt;smooth_time&gt;]
+[SAVE_TO_PROFILE=0|1]</code>: Sets the <code>smooth_time</code> of the specified heater.
+If <code>SMOOTH_TIME</code> is omitted, the value is reset to the configured one.
+If <code>SAVE_TO_PROFILE</code> is set to <code>1</code>, the new value is written to the
+currently loaded PID profile.</p>
 <h3 id="idle_timeout">[idle_timeout]<a class="headerlink" href="#idle_timeout" title="Permanent link">&para;</a></h3>
 <p>The idle_timeout module is automatically loaded.</p>
 <h4 id="set_idle_timeout">SET_IDLE_TIMEOUT<a class="headerlink" href="#set_idle_timeout" title="Permanent link">&para;</a></h4>
@@ -5911,12 +6009,60 @@ the paused state is fresh for each print.</p>
 in the config file.</p>
 <h4 id="pid_calibrate_1">PID_CALIBRATE<a class="headerlink" href="#pid_calibrate_1" title="Permanent link">&para;</a></h4>
 <p><code>PID_CALIBRATE HEATER=&lt;config_name&gt; TARGET=&lt;temperature&gt;
-[WRITE_FILE=1]</code>: Perform a PID calibration test. The specified heater
-will be enabled until the specified target temperature is reached, and
-then the heater will be turned off and on for several cycles. If the
-WRITE_FILE parameter is enabled, then the file /tmp/heattest.txt will
-be created with a log of all temperature samples taken during the
-test.</p>
+[WRITE_FILE=1] [TOLERANCE=0.02] [PROFILE=&lt;profile_name&gt;]</code>: Perform a PID
+calibration test. The specified heater will be enabled until the
+specified target temperature is reached, and then the heater will be
+turned off and on for several cycles. If the WRITE_FILE parameter is
+enabled, then the file /tmp/heattest.csv will be created with a log of
+all temperature samples taken during the test. TOLERANCE defaults to
+0.02 if not passed in. The tighter the tolerance the better the
+calibration result will be, but how tight you can achieve depends on
+how clean your sensor readings are. Low noise readings might allow 0.01
+to be used, while noisy readings might require a value of 0.03 or
+higher. PROFILE selects the PID profile slot the result is stored in;
+the default <code>default</code> writes the values back to the heater's config
+section, while any other name creates or updates a <code>[pid_profile
+&lt;heater_name&gt; &lt;profile&gt;]</code> section. The change becomes permanent after
+<code>SAVE_CONFIG</code>.</p>
+<h4 id="set_heater_pid">SET_HEATER_PID<a class="headerlink" href="#set_heater_pid" title="Permanent link">&para;</a></h4>
+<p><code>SET_HEATER_PID HEATER=&lt;heater_name&gt; [KP=&lt;kp&gt;] [KI=&lt;ki&gt;] [KD=&lt;kd&gt;]</code>:
+Updates the PID coefficients of the named heater at runtime without
+requiring a configuration reload. The heater must use the <code>pid</code> or
+<code>pid_v</code> control algorithm. Any of KP/KI/KD that are omitted are left
+unchanged. <code>HEATER</code> takes the short name (so for <code>heater_generic chamber</code>
+write <code>chamber</code>).</p>
+<h3 id="pid_profile">[pid_profile]<a class="headerlink" href="#pid_profile" title="Permanent link">&para;</a></h3>
+<p>The <code>pid_profile</code> module is automatically loaded if a heater is defined
+in the config file. <code>HEATER</code> takes the short name (so for
+<code>heater_generic chamber</code> write <code>chamber</code>).</p>
+<h4 id="pid_profile_1">PID_PROFILE<a class="headerlink" href="#pid_profile_1" title="Permanent link">&para;</a></h4>
+<p><code>PID_PROFILE LOAD=&lt;profile_name&gt; HEATER=&lt;heater_name&gt; [DEFAULT=&lt;profile_name&gt;]
+[VERBOSE=&lt;verbosity&gt;] [KEEP_TARGET=0|1] [LOAD_CLEAN=0|1]</code>:
+Loads the named PID profile for the specified heater. If <code>DEFAULT</code> is
+specified, that profile is loaded when the requested <code>LOAD</code> profile is
+not found. <code>VERBOSE</code> controls console output: <code>low</code> prints minimal info,
+<code>high</code> prints all profile parameters, any other value suppresses output.
+If <code>KEEP_TARGET</code> is <code>1</code>, the heater retains its current target
+temperature; if <code>0</code> (the default), the target is reset to <code>0</code> so the
+algorithm has time to settle. If <code>LOAD_CLEAN</code> is <code>1</code>, the profile is
+loaded as if the printer just started up; if <code>0</code> (the default), the
+profile retains previous heating state to reduce overshoot — set this
+to <code>1</code> only if profile switching produces erratic behaviour.</p>
+<p><code>PID_PROFILE SAVE=&lt;profile_name&gt; HEATER=&lt;heater_name&gt;</code>: Saves the
+currently loaded profile of the specified heater to the config under the
+given name. The change becomes permanent after <code>SAVE_CONFIG</code>.</p>
+<p><code>PID_PROFILE REMOVE=&lt;profile_name&gt; HEATER=&lt;heater_name&gt;</code>: Removes the
+named profile from the in-memory profile list. The removal becomes
+permanent after <code>SAVE_CONFIG</code>.</p>
+<p><code>PID_PROFILE SET_VALUES=&lt;profile_name&gt; HEATER=&lt;heater_name&gt;
+TARGET=&lt;target_temp&gt; TOLERANCE=&lt;tolerance&gt; CONTROL=&lt;control_type&gt;
+KP=&lt;kp&gt; KI=&lt;ki&gt; KD=&lt;kd&gt; [KEEP_TARGET=0|1] [LOAD_CLEAN=0|1]</code>: Creates a
+new profile with the supplied PID values and immediately loads it.
+<code>CONTROL</code> must be <code>pid</code> or <code>pid_v</code>. <code>TARGET</code> and <code>TOLERANCE</code> must be
+specified to form a valid profile. <code>KEEP_TARGET</code> and <code>LOAD_CLEAN</code> behave
+as described under <code>LOAD</code>.</p>
+<p><code>PID_PROFILE GET_VALUES=&lt;profile_name&gt; HEATER=&lt;heater_name&gt;</code>: Prints the
+parameters of the named profile to the console.</p>
 <h3 id="print_stats">[print_stats]<a class="headerlink" href="#print_stats" title="Permanent link">&para;</a></h3>
 <p>The print_stats module is automatically loaded.</p>
 <h4 id="set_print_stats_info">SET_PRINT_STATS_INFO<a class="headerlink" href="#set_print_stats_info" title="Permanent link">&para;</a></h4>
