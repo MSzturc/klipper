@@ -105,6 +105,10 @@ Fields["CHOPCONF"] = {
     "diss2g":                   0x01 << 30,
     "diss2vs":                  0x01 << 31
 }
+Fields["DCCTRL"] = {
+    "dc_time":                  0x3FF << 0,    # AN-003 §4.1
+    "dc_sg":                    0xFF  << 16,   # AN-003 §4.2
+}
 Fields["DRV_CONF"] = {
     "bbmtime":                  0x1F << 0,
     "bbmclks":                  0x0F << 8,
@@ -274,6 +278,77 @@ MAX_CURRENT = 10.000 # Maximum dependent on board, but 10 is safe sanity check
 # value but produces a much cleaner StallGuard signal.
 HOMING_GLOBALSCALER_MIN_ROBUST = 31
 
+
+def _validate_short_conf(config, voltage, s2vs_level_pin, s2g_level_pin):
+    """VS-aware SHORT_CONF validation.
+
+    Raises config.error if VS > 52 V and driver_S2G_LEVEL < 12 (datasheet §6.3).
+    Emits a logging.warning if VS > 52 V but SHORT_CONF is not explicitly set.
+    """
+    if (voltage is not None and voltage > 52.0
+            and s2g_level_pin is not None and s2g_level_pin < 12):
+        raise config.error(
+            "TMC5160 [%s]: at VS=%.1fV (>52V) the driver_S2G_LEVEL "
+            "must be >=12 per datasheet \xa76.3 to avoid false short-"
+            "to-GND triggers; you set %d. Either raise driver_S2G_LEVEL "
+            "to >=12, or lower the supply voltage."
+            % (config.get_name(), voltage, s2g_level_pin))
+    if (voltage is not None and voltage > 52.0
+            and s2vs_level_pin is None and s2g_level_pin is None):
+        logging.warning(
+            "TMC5160 [%s]: VS=%.1fV (>52V) but SHORT_CONF is not "
+            "explicitly programmed. The chip's OTP defaults may "
+            "permit false short-to-GND triggers at this voltage. "
+            "Set both driver_S2VS_LEVEL (>=4) and driver_S2G_LEVEL "
+            "(>=12) to silence this warning. (Datasheet \xa76.3)",
+            config.get_name(), voltage)
+
+
+def _validate_chopconf(config):
+    """Guard CHOPCONF boundary constraints unconditionally.
+
+    The TOFF=1/TBL=0 and dcStep+TOFF<3 validations in tune_driver /
+    _configure_spreadcycle only fire for autotune-ON configs (motor: + voltage:
+    present).  A user with autotune OFF who pins driver_TOFF=1 + driver_TBL=0,
+    or who enables dcStep via driver_VHIGHFS=1 + driver_VHIGHCHM=1 with a low
+    driver_TOFF, would otherwise get silent mis-programming.  Both constraints
+    are TMC5160 datasheet limits (§5.2 CHOPCONF and §13.2 dcStep), not
+    autotune artefacts — they must be enforced at config-load time regardless
+    of autotune state.
+    """
+    toff_pin = config.getint('driver_TOFF', None, minval=1, maxval=15)
+    tbl_pin  = config.getint('driver_TBL',  None, minval=0, maxval=3)
+    # VHIGHFS/VHIGHCHM are 1-bit fields; use getboolean so
+    # "driver_VHIGHFS: True" is accepted, matching set_config_field's own
+    # branch (maxval==1 → getboolean) and BaseTMCCurrentHelper.__init__.
+    vhighfs_pin  = config.getboolean('driver_VHIGHFS',  None)
+    vhighchm_pin = config.getboolean('driver_VHIGHCHM', None)
+
+    # TOFF=1 with TBL=0 is invalid per TMC5160 datasheet §5.2 CHOPCONF.
+    # Only raise when both are explicitly user-pinned; autotune chose one or
+    # both, in which case _configure_spreadcycle handles the correction.
+    if toff_pin == 1 and tbl_pin == 0:
+        raise config.error(
+            "tmc5160 %s: driver_TOFF=1 with driver_TBL=0 is invalid per"
+            " the TMC5160 datasheet (\xa75.2 CHOPCONF); set driver_TBL"
+            " to 1 or higher, or remove driver_TBL and let autotune"
+            " choose." % (config.get_name(),))
+
+    # dcStep (activated when both vhighfs and vhighchm are set) requires
+    # TOFF>=3 per TMC5160 datasheet §13.2.  Only raise when all three pins
+    # are explicitly user-set; partial-pin configs rely on autotune to choose
+    # safe values via the corresponding check in tune_driver.
+    if (vhighfs_pin is not None and vhighchm_pin is not None
+            and toff_pin is not None
+            and vhighfs_pin and vhighchm_pin and toff_pin < 3):
+        raise config.error(
+            "tmc5160 %s: dcStep (driver_VHIGHFS=1 + driver_VHIGHCHM=1)"
+            " requires driver_TOFF>=3 per the TMC5160 datasheet (\xa713.2);"
+            " current driver_TOFF=%d.  Set driver_TOFF to 3 or higher,"
+            " or disable dcStep with driver_VHIGHFS=0."
+            % (config.get_name(), toff_pin))
+
+
 class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
     def __init__(self, config, mcu_tmc):
         # Resolve before super().__init__ so a stepstick_type with a
@@ -437,12 +512,52 @@ class TMC5160:
         # Setup basic register values
         tmc.TMCWaveTableHelper(config, self.mcu_tmc)
         tmc.TMCStealthchopHelper(config, self.mcu_tmc)
-        tmc.TMCVcoolthrsHelper(config, self.mcu_tmc)
-        tmc.TMCVhighHelper(config, self.mcu_tmc)
-        # Allow other registers to be set from the config
+        # driver_TPWMTHRS raw pin must override the stealthchop_threshold-
+        # derived value written by TMCStealthchopHelper when autotune is
+        # disabled (tune_driver returns early without motor:/voltage:, so
+        # _configure_pwm never runs for autotune-OFF configs).
+        # set_config_field with default=None writes only when the user set
+        # the field explicitly, so a config without driver_TPWMTHRS is
+        # unaffected.
         set_config_field = self.fields.set_config_field
+        set_config_field(config, "tpwmthrs", None)
+        # Mirror the _configure_pwm en_pwm_mode symmetry rule here for the
+        # autotune-OFF path: when TPWMTHRS != 0xfffff StealthChop may engage
+        # (en_pwm_mode=1); when TPWMTHRS == 0xfffff it never triggers
+        # (en_pwm_mode=0).  Without this, autotune-OFF + driver_TPWMTHRS
+        # leaves en_pwm_mode at the chip's reset value, which is incoherent
+        # with the user-pinned threshold.  driver_EN_PWM_MODE still wins via
+        # set_config_field's getint path if the user sets it explicitly.
+        _tpwmthrs_pin = config.getint("driver_TPWMTHRS", None,
+                                      minval=0, maxval=0xfffff)
+        if _tpwmthrs_pin is not None:
+            set_config_field(config, "en_pwm_mode",
+                             1 if _tpwmthrs_pin != 0xfffff else 0)
+        tmc.TMCVcoolthrsHelper(config, self.mcu_tmc)
+        # driver_TCOOLTHRS raw pin must override the coolstep_threshold-
+        # derived value written by TMCVcoolthrsHelper when autotune is
+        # disabled.  Mutual-exclusion with coolstep_threshold is already
+        # enforced in BaseTMCCurrentHelper.__init__ (config error).
+        set_config_field(config, "tcoolthrs", None)
+        tmc.TMCVhighHelper(config, self.mcu_tmc)
+        # driver_THIGH raw pin must override the high_velocity_threshold-
+        # derived value written by TMCVhighHelper when autotune is disabled.
+        # Mutual-exclusion with high_velocity_threshold is already enforced
+        # in BaseTMCCurrentHelper.__init__ (config error).
+        set_config_field(config, "thigh", None)
+        # Allow other registers to be set from the config
         #   GCONF
         set_config_field(config, "multistep_filt", True)
+        # FASTSTANDSTILL and SMALL_HYSTERESIS (GCONF flags) are only written
+        # inside _configure_coolstep(), which runs as part of tune_driver().
+        # When autotune is disabled those helpers never run, leaving the
+        # fields at their hardware reset values (both 0).  Provide static
+        # pin-respecting defaults so autotune-OFF configs are not stuck at
+        # reset values: faststandstill=True matches the autotune default;
+        # small_hysteresis=False is the conservative reset-value default
+        # (autotune would otherwise derive 0/1 from tuning_goal).
+        set_config_field(config, "faststandstill", True)
+        set_config_field(config, "small_hysteresis", False)
         #   CHOPCONF
         set_config_field(config, "toff", 3)
         set_config_field(config, "hstrt", 5)
@@ -468,15 +583,37 @@ class TMC5160:
         set_config_field(config, "drvstrength", 0)
         set_config_field(config, "bbmclks", 4)
         set_config_field(config, "bbmtime", 0)
-        set_config_field(config, "filt_isense", 0)
+        # filt_isense static default must reflect voltage even when motor: is
+        # absent — tune_driver returns early without motor, so
+        # _configure_drvconf never runs for a voltage-only config.  Re-read
+        # voltage here (before BaseTMCCurrentHelper reads it in __init__) so
+        # the static shadow is correct from the first _init_registers call.
+        _filt_voltage = config.getfloat('voltage', None, minval=0., maxval=60.)
+        _filt_isense_pin = config.getint('driver_FILT_ISENSE', None,
+                                         minval=0, maxval=3)
+        if _filt_isense_pin is not None:
+            _filt_isense_default = _filt_isense_pin
+        elif _filt_voltage is not None and _filt_voltage > 52.0:
+            _filt_isense_default = 1
+        else:
+            _filt_isense_default = 0
+        set_config_field(config, "filt_isense", _filt_isense_default)
+        set_config_field(config, "otselect", 0)
         #   SHORT_CONF — write-only register; the chip's OTP defaults are
         # not readable, so we only program it when the user has set both
         # of the level fields explicitly.  Setting individual sub-fields
         # without both s2vs_level and s2g_level would corrupt the chip's
         # short-detection thresholds, so that combination is rejected.
-        if (config.getint("driver_s2vs_level", None, 4, 15) is not None
-                and config.getint("driver_s2g_level", None, 2, 15)
-                is not None):
+        s2vs_level_pin = config.getint("driver_S2VS_LEVEL", None, 4, 15)
+        s2g_level_pin = config.getint("driver_S2G_LEVEL", None, 2, 15)
+        voltage = config.getfloat('voltage', None, minval=0., maxval=60.)
+
+        # VS-aware SHORT_CONF validation
+        _validate_short_conf(config, voltage, s2vs_level_pin, s2g_level_pin)
+        # CHOPCONF boundary constraints (also enforced for autotune-OFF)
+        _validate_chopconf(config)
+
+        if s2vs_level_pin is not None and s2g_level_pin is not None:
             set_config_field(config, "s2vs_level", 6)
             set_config_field(config, "s2g_level", 6)
             set_config_field(config, "short_filter", 1)
@@ -484,7 +621,7 @@ class TMC5160:
         elif any(config.get("driver_%s" % field, None) is not None
                  for field in Fields["SHORT_CONF"].keys()):
             raise config.error(
-                "driver_s2vs_level and driver_s2g_level must both be set "
+                "driver_S2VS_LEVEL and driver_S2G_LEVEL must both be set "
                 "to update SHORT_CONF on TMC5160 [%s]" % (config.get_name(),))
         #   IHOLDIRUN
         set_config_field(config, "iholddelay", 6)
@@ -499,6 +636,14 @@ class TMC5160:
         set_config_field(config, "pwm_lim", 12)
         #   TPOWERDOWN
         set_config_field(config, "tpowerdown", 10)
+        #   DCCTRL — pin user values into the shadow so _init_registers
+        # writes DCCTRL even when autotune is off (tune_driver returns early
+        # without motor:/voltage:, so _configure_dcstep is never called for
+        # autotune-OFF configs).  Default 0 matches the chip's reset value;
+        # driver_DC_TIME / driver_DC_SG pins override via set_config_field's
+        # getint path.
+        set_config_field(config, "dc_time", 0)
+        set_config_field(config, "dc_sg", 0)
 
 def load_config_prefix(config):
     return TMC5160(config)

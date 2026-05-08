@@ -967,6 +967,8 @@ TUNE_FLUSH_REGS = (
     "CHOPCONF", "COOLCONF", "PWMCONF", "IHOLD_IRUN",
     "TPWMTHRS", "TCOOLTHRS", "THIGH",
     "SGTHRS", "SG4_THRS", "OTW_OV_VTH",
+    "DRV_CONF",   # VS-aware filt_isense default lives here
+    "DCCTRL",     # dcStep tuning register
 )
 
 
@@ -1083,6 +1085,99 @@ class BaseTMCCurrentHelper:
         # their pre-homing values even when autotune is off or the
         # _last_tuned_current cache shortcuts the run-profile re-derive.
         self._run_profile_snapshot = None
+        # ------------------------------------------------------------
+        # Tuning goal — selects the auto-derivation strategy used by
+        # the _configure_* helpers when a field is not explicitly
+        # pinned via driver_X.
+        #   * performance — max acceleration / torque (current behaviour)
+        #   * balanced    — daily-driver, hours-printable, few artefacts
+        #   * silent      — minimum audible noise + maximum vibration smoothing
+        self.tuning_goal = config.getchoice(
+            'tuning_goal',
+            {'performance': 'performance',
+             'balanced':    'balanced',
+             'silent':      'silent'},
+            'balanced')
+        # ------------------------------------------------------------
+        # PWM/StealthChop pin-reads
+        self.pwm_freq = config.getint('driver_PWM_FREQ', None,
+                                       minval=0, maxval=3)
+        self.pwm_autoscale = config.getboolean('driver_PWM_AUTOSCALE', None)
+        self.pwm_autograd = config.getboolean('driver_PWM_AUTOGRAD', None)
+        self.pwm_grad = config.getint('driver_PWM_GRAD', None,
+                                       minval=0, maxval=255)
+        self.pwm_ofs = config.getint('driver_PWM_OFS', None,
+                                      minval=0, maxval=255)
+        self.pwm_reg_pin = config.getint('driver_PWM_REG', None,
+                                          minval=1, maxval=15)
+        self.pwm_lim_pin = config.getint('driver_PWM_LIM', None,
+                                          minval=0, maxval=15)
+        # tpwmthrs has three pin paths in order of precedence (highest first):
+        #   1. driver_TPWMTHRS  — raw register pin (user sets exact TSTEP value)
+        #   2. stealthchop_threshold — velocity-form pin; TMCStealthchopHelper
+        #      converts it to TSTEP at config-time, but we must re-read it here
+        #      so _configure_pwm sees the velocity-form value too.  Without
+        #      that, the TMCStealthchopHelper write is silently overwritten by
+        #      the goal-derived default in _configure_pwm.
+        #   3. goal-default (_derive_tpwmthrs)
+        self.tpwmthrs_pin = config.getint('driver_TPWMTHRS', None,
+                                           minval=0, maxval=0xfffff)
+        self.stealthchop_threshold = config.getfloat(
+            'stealthchop_threshold', None, minval=0.)
+        # GCONF flag pin-reads
+        self.faststandstill = config.getboolean('driver_FASTSTANDSTILL', None)
+        self.small_hysteresis = config.getboolean('driver_SMALL_HYSTERESIS',
+                                                   None)
+        self.multistep_filt = config.getboolean('driver_MULTISTEP_FILT', None)
+        # CoolStep pin-reads
+        self.semin = config.getint('driver_SEMIN', None, minval=0, maxval=15)
+        self.semax = config.getint('driver_SEMAX', None, minval=0, maxval=15)
+        self.seup = config.getint('driver_SEUP', None, minval=0, maxval=3)
+        self.sedn = config.getint('driver_SEDN', None, minval=0, maxval=3)
+        self.seimin = config.getboolean('driver_SEIMIN', None)
+        self.sfilt = config.getboolean('driver_SFILT', None)
+        self.iholddelay = config.getint('driver_IHOLDDELAY', None,
+                                         minval=0, maxval=15)
+        # Velocity-threshold and high-speed pin-reads
+        self.tcoolthrs_pin = config.getint('driver_TCOOLTHRS', None,
+                                            minval=0, maxval=0xfffff)
+        self.thigh_pin = config.getint('driver_THIGH', None,
+                                        minval=0, maxval=0xfffff)
+        self.vhighfs = config.getboolean('driver_VHIGHFS', None)
+        self.vhighchm = config.getboolean('driver_VHIGHCHM', None)
+        # Velocity-form pins (already read by TMCVcoolthrsHelper /
+        # TMCVhighHelper at config-time; we re-read them here so the
+        # autotune path can apply pin-precedence: raw > velocity > goal)
+        self.coolstep_threshold = config.getfloat('coolstep_threshold', None,
+                                                   minval=0.)
+        self.high_velocity_threshold = config.getfloat(
+            'high_velocity_threshold', None, minval=0.)
+        # Conflict detection at the config boundary.
+        # Setting both the raw register pin and the velocity-form pin for the
+        # same threshold register is ambiguous; raise an error so the user
+        # is told which knob to use rather than silently letting raw win.
+        if self.tcoolthrs_pin is not None and self.coolstep_threshold is not None:
+            raise config.error(
+                "TMC [%s]: driver_TCOOLTHRS and coolstep_threshold are "
+                "mutually exclusive — use one or the other. "
+                "driver_TCOOLTHRS sets the raw TSTEP register value; "
+                "coolstep_threshold sets it from a velocity in mm/s. "
+                "Remove one of the two options." % (config.get_name(),))
+        if self.thigh_pin is not None and self.high_velocity_threshold is not None:
+            raise config.error(
+                "TMC [%s]: driver_THIGH and high_velocity_threshold are "
+                "mutually exclusive — use one or the other. "
+                "driver_THIGH sets the raw TSTEP register value; "
+                "high_velocity_threshold sets it from a velocity in mm/s. "
+                "Remove one of the two options." % (config.get_name(),))
+        # DRV_CONF VS-aware defaults
+        self.filt_isense = config.getint('driver_FILT_ISENSE', None,
+                                          minval=0, maxval=3)
+        # DCCTRL pin-reads
+        self.dc_time = config.getint('driver_DC_TIME', None,
+                                      minval=0, maxval=0x3FF)
+        self.dc_sg = config.getint('driver_DC_SG', None,
+                                    minval=0, maxval=0xFF)
     # Introspection --------------------------------------------------------
     def needs_home_current_change(self):
         return self.actual_current != self.req_home_current
@@ -1329,6 +1424,21 @@ class BaseTMCCurrentHelper:
         self._configure_coolstep()
         self._configure_overvoltage()
         self._configure_highspeed(motor_object, new_current)
+        # dcStep (activated when both vhighfs and vhighchm are set above
+        # THIGH) requires TOFF>=3 per TMC5160 datasheet §13.2.  Check after
+        # _configure_highspeed so both vhighfs/vhighchm and toff are final.
+        _toff_final = self.fields.get_field("toff")
+        _vhighfs_final = self.fields.get_field("vhighfs")
+        _vhighchm_final = self.fields.get_field("vhighchm")
+        if _vhighfs_final and _vhighchm_final and _toff_final < 3:
+            raise self.printer.config_error(
+                "tmc %s: dcStep requires TOFF>=3 per the TMC5160 datasheet"
+                " (§13.2); current TOFF=%d.  Set driver_TOFF to 3 or higher"
+                " when using performance goal (vhighfs+vhighchm enabled),"
+                " or disable dcStep with driver_VHIGHFS=False."
+                % (self.name, _toff_final))
+        self._configure_drvconf()
+        self._configure_dcstep(motor_object, new_current)
         # Flush every register the _configure_* helpers may have dirtied.
         # Without this, tuned chopper / PWM / threshold values stay only
         # in the shadow cache and reach the hardware at the next bulk
@@ -1355,25 +1465,106 @@ class BaseTMCCurrentHelper:
         tstep = TMCtstepHelper(self.mcu_tmc, velocity, pstepper=self.stepper)
         self.fields.set_field(field, tstep)
     def _configure_pwm(self, motor_object, new_current):
-        pwm_freq, calc_freq = motor_object.pwmfreq(
-            fclk=self.driver_clock_frequency, target=self.pwm_freq_target)
-        pwmgrad = motor_object.pwmgrad(volts=self.voltage,
-                                       fclk=self.driver_clock_frequency)
-        pwmofs = motor_object.pwmofs(volts=self.voltage, current=new_current)
-        logging.info("tmc %s autotune: pwm_freq=%d (~%.1f kHz) pwmgrad=%d"
-                     " pwmofs=%d", self.name, pwm_freq, calc_freq / 1e3,
-                     pwmgrad, pwmofs)
+        # Per-field: user pin wins; otherwise derive from motor model or goal.
+        if self.pwm_freq is not None:
+            pwm_freq = self.pwm_freq
+            calc_freq = motor_object.pwmfreq_to_hz(
+                pwm_freq, fclk=self.driver_clock_frequency)
+        else:
+            pwm_freq, calc_freq = motor_object.pwmfreq(
+                fclk=self.driver_clock_frequency,
+                target=self.pwm_freq_target)
+        self._calc_freq = calc_freq  # consumed by _configure_spreadcycle
+
+        pwmgrad = (self.pwm_grad if self.pwm_grad is not None
+                   else motor_object.pwmgrad(
+                       volts=self.voltage,
+                       fclk=self.driver_clock_frequency))
+        pwmofs = (self.pwm_ofs if self.pwm_ofs is not None
+                  else motor_object.pwmofs(
+                      volts=self.voltage, current=new_current))
+
+        pwm_autoscale = (self.pwm_autoscale if self.pwm_autoscale is not None
+                         else True)
+        pwm_autograd = (self.pwm_autograd if self.pwm_autograd is not None
+                        else True)
+        pwm_reg = (self.pwm_reg_pin if self.pwm_reg_pin is not None
+                   else self._derive_pwm_reg())
+        pwm_lim = (self.pwm_lim_pin if self.pwm_lim_pin is not None
+                   else self._derive_pwm_lim())
+        # Pin precedence: raw driver_TPWMTHRS > stealthchop_threshold velocity
+        # > goal-default.
+        if self.tpwmthrs_pin is not None:
+            tpwmthrs = self.tpwmthrs_pin
+        elif self.stealthchop_threshold is not None:
+            tpwmthrs = TMCtstepHelper(self.mcu_tmc, self.stealthchop_threshold,
+                                      pstepper=self.stepper)
+        else:
+            tpwmthrs = self._derive_tpwmthrs(motor_object, new_current)
+
+        # Set en_pwm_mode (or en_spreadcycle for TMC2208/2209) symmetrically:
+        # 1 when TPWMTHRS allows StealthChop to engage (threshold < 0xfffff),
+        # 0 when TPWMTHRS is pegged at 0xfffff ("never cross into StealthChop").
+        # The write must be symmetric so a driver_TPWMTHRS: 0xfffff pin can
+        # override an en_pwm_mode=1 already written by TMCStealthchopHelper —
+        # otherwise the register state is incoherent (StealthChop "armed" but
+        # threshold set to never trigger).
+        reg = self.fields.lookup_register("en_pwm_mode", None)
+        if reg is not None:
+            self.fields.set_field("en_pwm_mode",
+                                  1 if tpwmthrs != 0xfffff else 0)
+        else:
+            # TMC2208/2209 family: en_spreadcycle=0 enables StealthChop
+            if self.fields.lookup_register("en_spreadcycle", None) is not None:
+                self.fields.set_field("en_spreadcycle",
+                                      0 if tpwmthrs != 0xfffff else 1)
+
+        logging.info("tmc %s autotune (goal=%s): pwm_freq=%d (~%.1f kHz)"
+                     " pwmgrad=%d pwmofs=%d pwm_reg=%d pwm_lim=%d"
+                     " tpwmthrs=%d",
+                     self.name, self.tuning_goal, pwm_freq, calc_freq / 1e3,
+                     pwmgrad, pwmofs, pwm_reg, pwm_lim, tpwmthrs)
+
         self.fields.set_field("pwm_freq", pwm_freq)
-        self.fields.set_field("pwm_autoscale", True)
-        self.fields.set_field("pwm_autograd", True)
+        self.fields.set_field("pwm_autoscale", pwm_autoscale)
+        self.fields.set_field("pwm_autograd", pwm_autograd)
         self.fields.set_field("pwm_grad", pwmgrad)
         self.fields.set_field("pwm_ofs", pwmofs)
-        self.fields.set_field("pwm_reg", 15)
-        self.fields.set_field("pwm_lim", 4)
-        self.fields.set_field("tpwmthrs", 0xfffff)
+        self.fields.set_field("pwm_reg", pwm_reg)
+        self.fields.set_field("pwm_lim", pwm_lim)
+        self.fields.set_field("tpwmthrs", tpwmthrs)
+
+    def _derive_pwm_reg(self):
+        # PI response speed per goal
+        return {'performance': 15, 'balanced': 8, 'silent': 4}[self.tuning_goal]
+
+    def _derive_pwm_lim(self):
+        # Transition cap per goal
+        return {'performance': 4, 'balanced': 8, 'silent': 12}[self.tuning_goal]
+
+    def _derive_small_hysteresis(self):
+        # Silent uses small_hysteresis for smoother microstep transitions at
+        # the cost of slight torque-ripple sensitivity.
+        return self.tuning_goal == 'silent'
+
+    def _derive_tpwmthrs(self, motor_object, current):
+        # StealthChop crossover velocity, in TSTEP units, per tuning goal:
+        #   performance: 0xfffff (StealthChop never)
+        #   balanced:    0.3 * vmaxpwm (StealthChop low-speed only)
+        #   silent:      1.2 * vmaxpwm (StealthChop until physical limit)
+        if self.tuning_goal == 'performance':
+            return 0xfffff
+        maxpwmrps = motor_object.maxpwmrps(
+            volts=self.voltage, current=current,
+            fclk=self.driver_clock_frequency)
+        rdist = self.stepper.get_rotation_distance()[0]
+        ratio = 0.3 if self.tuning_goal == 'balanced' else 1.2
+        velocity = ratio * maxpwmrps * rdist
+        # Convert velocity to TSTEP via the existing helper
+        return TMCtstepHelper(self.mcu_tmc, velocity, pstepper=self.stepper)
+
     def _configure_spreadcycle(self, motor_object, new_current):
-        _, calc_freq = motor_object.pwmfreq(
-            fclk=self.driver_clock_frequency, target=self.pwm_freq_target)
+        calc_freq = self._calc_freq    # set by _configure_pwm just above
         ncycles = int(math.ceil(self.driver_clock_frequency / calc_freq))
         tbl = self.tbl or 0
         tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
@@ -1382,7 +1573,14 @@ class BaseTMCCurrentHelper:
         # below chopper_freq_target (default 20 kHz so we sit just above
         # the audible band).
         if self.toff is None:
-            target = self.chopper_freq_target or 20e3
+            # Goal-specific chopper frequency defaults: performance=20 kHz
+            # (just above audible), balanced=35 kHz (reduced SpreadCycle
+            # hissing), silent=45 kHz (ultrasonic).  A user-configured
+            # chopper_freq_target always wins.
+            _goal_chopper_defaults = {
+                'performance': 20e3, 'balanced': 35e3, 'silent': 45e3}
+            target = (self.chopper_freq_target
+                      or _goal_chopper_defaults[self.tuning_goal])
             toff = 0
             while True:
                 tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
@@ -1402,18 +1600,34 @@ class BaseTMCCurrentHelper:
             toff = max(toff - 1, 1)
         else:
             toff = self.toff
-        # TOFF=1 with TBL=0 is invalid per datasheet; bump TBL.
+        # TOFF=1 with TBL=0 is invalid per TMC5160 datasheet §5.2.
+        # When BOTH fields are user-pinned, raise an error instead of silently
+        # correcting — silent correction is only safe when autotune chose one
+        # or both values.
         if toff == 1 and tbl == 0:
+            if self.toff is not None and self.tbl is not None:
+                raise self.printer.config_error(
+                    "tmc %s: driver_TOFF=1 with driver_TBL=0 is invalid per"
+                    " the TMC5160 datasheet (§5.2 CHOPCONF); set driver_TBL"
+                    " to 1 or higher, or remove one of the pins and let"
+                    " autotune choose." % (self.name,))
             tbl = 1
             tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
         tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
         # Allocate the remaining cycle time to TPFD (passive fast decay).
         # The (×2 - tblank) accounts for the two slow-decay phases per
         # cycle minus blanking already counted.
+        # Silent goal forces TPFD=0: passive fast decay interacts with
+        # ultrasonic StealthChop and can introduce audible resonances, so it
+        # is disabled entirely for the silent goal.
         pfdcycles = (ncycles
                      - (tsd_duty * 2. - tblank) * self.driver_clock_frequency)
-        tpfd = (max(0, min(15, int(math.ceil(pfdcycles / 128.))))
-                if self.tpfd is None else self.tpfd)
+        if self.tpfd is not None:
+            tpfd = self.tpfd
+        elif self.tuning_goal == 'silent':
+            tpfd = 0
+        else:
+            tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128.))))
         logging.info("tmc %s autotune: tbl=%d toff=%d tpfd=%d",
                      self.name, tbl, toff, tpfd)
         self.fields.set_field("tpfd", tpfd)
@@ -1422,18 +1636,22 @@ class BaseTMCCurrentHelper:
         return tbl, toff
     def _configure_hysteresis(self, motor_object, new_current,
                               new_tbl, new_toff):
-        if self.hstrt is not None and self.hend is not None:
-            hstrt, hend = self.hstrt, self.hend
-        else:
-            hstrt, hend = motor_object.hysteresis(
-                name=self.name, extra=self.extra_hysteresis,
-                fclk=self.driver_clock_frequency, volts=self.voltage,
-                current=new_current, tbl=new_tbl, toff=new_toff,
-                rsense=self.sense_resistor, scale=self.cs)
+        # Allow partial pinning: if the user set only one of driver_HSTRT /
+        # driver_HEND, the pinned field wins and the unpinned field falls
+        # back to the autotune-derived value.  HSTRT and HEND are independent
+        # CHOPCONF sub-fields with no hardware constraint that mandates
+        # setting them as a pair; partial overrides
+        # are safe and allow fine-grained tuning on top of autotune.
+        hstrt_auto, hend_auto = motor_object.hysteresis(
+            name=self.name, extra=self.extra_hysteresis,
+            fclk=self.driver_clock_frequency, volts=self.voltage,
+            current=new_current, tbl=new_tbl, toff=new_toff,
+            rsense=self.sense_resistor, scale=self.cs)
+        hstrt = self.hstrt if self.hstrt is not None else hstrt_auto
+        hend = self.hend if self.hend is not None else hend_auto
         self.fields.set_field("hstrt", hstrt)
         self.fields.set_field("hend", hend)
     def _configure_stallguard(self, new_current):
-        coolthrs = 0.75 * self.stepper.get_rotation_distance()[0]
         if self.fields.lookup_register("sg4_thrs", None) is not None:
             if self.sg4_thrs is not None:
                 self.fields.set_field("sg4_thrs", self.sg4_thrs)
@@ -1443,21 +1661,65 @@ class BaseTMCCurrentHelper:
                 self.fields.set_field("sgthrs", self.sg4_thrs)
         if self.sgt is not None:
             self.fields.set_field("sgt", self.sgt)
-        # tcoolthrs = velocity above which CoolStep / StallGuard activate.
-        # 0.75 rev/s is a conservative below-print-speed default.
-        self._set_velocity_field("tcoolthrs", coolthrs)
+        # tcoolthrs precedence: raw driver_TCOOLTHRS > velocity-form
+        # coolstep_threshold > goal-default
+        if self.tcoolthrs_pin is not None:
+            self.fields.set_field("tcoolthrs", self.tcoolthrs_pin)
+        elif self.coolstep_threshold is not None:
+            self._set_velocity_field("tcoolthrs", self.coolstep_threshold)
+        else:
+            # Goal-default: 0.75 rev/s — below this StallGuard becomes
+            # noisy due to insufficient back-EMF.  Same for all goals.
+            coolthrs = 0.75 * self.stepper.get_rotation_distance()[0]
+            self._set_velocity_field("tcoolthrs", coolthrs)
     def _configure_coolstep(self):
-        # Conservative coolstep / iholddelay defaults that keep current
-        # bounded but avoid stall-recovery oscillation.
-        self.fields.set_field("faststandstill", True)
-        self.fields.set_field("small_hysteresis", False)
-        self.fields.set_field("semin", 2)
-        self.fields.set_field("semax", 4)
-        self.fields.set_field("seup", 3)
-        self.fields.set_field("sedn", 2)
-        self.fields.set_field("seimin", 1)
-        self.fields.set_field("sfilt", 0)
-        self.fields.set_field("iholddelay", 12)
+        # Pin-respecting CoolStep configuration.  Goal-aware defaults; silent
+        # sets semin=0 to disable CoolStep entirely (no current-modulation
+        # noise).
+        defaults = self._coolstep_defaults_for_goal()
+
+        semin = self.semin if self.semin is not None else defaults['semin']
+        semax = self.semax if self.semax is not None else defaults['semax']
+        seup = self.seup if self.seup is not None else defaults['seup']
+        sedn = self.sedn if self.sedn is not None else defaults['sedn']
+        seimin = (self.seimin if self.seimin is not None
+                  else defaults['seimin'])
+        sfilt = self.sfilt if self.sfilt is not None else defaults['sfilt']
+        iholddelay = (self.iholddelay if self.iholddelay is not None
+                      else defaults['iholddelay'])
+
+        # GCONF flags (faststandstill, small_hysteresis) are handled here
+        # rather than in a dedicated _configure_gconf so the writes ride
+        # along with the CoolStep register flush.
+        faststandstill = (self.faststandstill if self.faststandstill is not None
+                          else True)
+        small_hysteresis = (self.small_hysteresis
+                            if self.small_hysteresis is not None
+                            else self._derive_small_hysteresis())
+
+        self.fields.set_field("faststandstill", faststandstill)
+        self.fields.set_field("small_hysteresis", small_hysteresis)
+        self.fields.set_field("semin", semin)
+        self.fields.set_field("semax", semax)
+        self.fields.set_field("seup", seup)
+        self.fields.set_field("sedn", sedn)
+        self.fields.set_field("seimin", seimin)
+        self.fields.set_field("sfilt", sfilt)
+        self.fields.set_field("iholddelay", iholddelay)
+
+    def _coolstep_defaults_for_goal(self):
+        # CoolStep defaults per goal.  Silent sets semin=0 which disables
+        # CoolStep entirely; the other fields then have no effect but are
+        # written for deterministic register state.
+        if self.tuning_goal == 'silent':
+            return {'semin': 0, 'semax': 0, 'seup': 0, 'sedn': 0,
+                    'seimin': 1, 'sfilt': 1, 'iholddelay': 12}
+        if self.tuning_goal == 'balanced':
+            return {'semin': 2, 'semax': 4, 'seup': 3, 'sedn': 2,
+                    'seimin': 1, 'sfilt': 1, 'iholddelay': 10}
+        # performance
+        return {'semin': 2, 'semax': 4, 'seup': 3, 'sedn': 2,
+                'seimin': 1, 'sfilt': 0, 'iholddelay': 12}
     def _configure_overvoltage(self):
         if self.overvoltage_vth is not None:
             # 0.009732 V/LSB per TMC2240 datasheet.  Guard against drivers
@@ -1467,16 +1729,89 @@ class BaseTMCCurrentHelper:
             vth = int(self.overvoltage_vth / 0.009732)
             self.fields.set_field("overvoltage_vth", vth)
     def _configure_highspeed(self, motor_object, new_current):
-        maxpwmrps = motor_object.maxpwmrps(volts=self.voltage,
-                                           current=new_current)
-        rdist = self.stepper.get_rotation_distance()[0]
-        # 1.2× margin keeps spreadCycle-fullStepping mode below the
-        # physically realisable PWM ceiling.
-        thigh_velocity = 1.2 * maxpwmrps * rdist
-        self._set_velocity_field("thigh", thigh_velocity)
-        self.fields.set_field("vhighfs", False)
-        self.fields.set_field("vhighchm", False)
-        self.fields.set_field("multistep_filt", True)
+        # Pin-respecting high-speed mode + thigh.
+        if self.tuning_goal == 'performance':
+            maxpwmrps = motor_object.maxpwmrps(
+                volts=self.voltage, current=new_current,
+                fclk=self.driver_clock_frequency)
+            rdist = self.stepper.get_rotation_distance()[0]
+            thigh_default_velocity = 1.2 * maxpwmrps * rdist
+        else:
+            thigh_default_velocity = None  # balanced/silent: no threshold
+
+        # THIGH precedence: raw > velocity > goal-default
+        if self.thigh_pin is not None:
+            self.fields.set_field("thigh", self.thigh_pin)
+        elif self.high_velocity_threshold is not None:
+            self._set_velocity_field("thigh", self.high_velocity_threshold)
+        elif thigh_default_velocity is not None:
+            self._set_velocity_field("thigh", thigh_default_velocity)
+        else:
+            # balanced/silent: no high-velocity threshold; matches
+            # Klipper upstream TMCVhighHelper default of THIGH=0 (CoolStep
+            # window remains open up to physical limits).
+            self.fields.set_field("thigh", 0)
+
+        # vhighfs / vhighchm: Goal-aware (only performance enables)
+        vhighfs_default = (self.tuning_goal == 'performance')
+        vhighchm_default = (self.tuning_goal == 'performance')
+        vhighfs = (self.vhighfs if self.vhighfs is not None
+                   else vhighfs_default)
+        vhighchm = (self.vhighchm if self.vhighchm is not None
+                    else vhighchm_default)
+        self.fields.set_field("vhighfs", vhighfs)
+        self.fields.set_field("vhighchm", vhighchm)
+
+        # multistep_filt rides with the high-speed register flush; it is a
+        # GCONF flag but logically tied to high-speed motion smoothing.
+        multistep_filt = (self.multistep_filt if self.multistep_filt is not None
+                          else True)
+        self.fields.set_field("multistep_filt", multistep_filt)
+    def _configure_drvconf(self):
+        # VS-aware filt_isense default. filt_isense reduces sense-line
+        # ringing artefacts; at high VS (>52V on TMC5160) PCB ringing is
+        # large enough that the 1us filter measurably cleans up hysteresis
+        # regulation.
+        if self.fields.lookup_register("filt_isense", None) is None:
+            return  # not a TMC5160-class driver
+        if self.filt_isense is not None:
+            value = self.filt_isense
+        else:
+            value = 1 if self.voltage and self.voltage > 52.0 else 0
+        self.fields.set_field("filt_isense", value)
+    def _configure_dcstep(self, motor_object, current):
+        # dcStep DCCTRL register tuning.  Active only under the performance
+        # goal (vhighfs+vhighchm enabled above THIGH).  In balanced/silent
+        # the values are written for deterministic register state but have
+        # no effect.
+        if self.fields.lookup_register("dc_time", None) is None:
+            return  # driver does not support DCCTRL (TMC2209/2240)
+
+        # dc_time: AN-003 §4.1 — minimum is TBL_blank_cycles + 1, typical
+        # is the motor commutation time at the operating point.
+        tbl = self.fields.get_field("tbl")
+        tbl_cycles = {0: 16, 1: 24, 2: 36, 3: 54}[tbl]
+        commutation_cycles = int(motor_object.commutation_time(
+            voltage=self.voltage, current=current)
+            * self.driver_clock_frequency)
+        dc_time_default = max(tbl_cycles + 1, commutation_cycles)
+        dc_time_default = min(dc_time_default, 0x3FF)
+
+        if self.dc_time is not None:
+            dc_time = self.dc_time
+        else:
+            dc_time = dc_time_default
+
+        # dc_sg: AN-003 §4.2 — typically dc_time / 16
+        if self.dc_sg is not None:
+            dc_sg = self.dc_sg
+        else:
+            dc_sg = max(1, dc_time // 16)
+
+        logging.info("tmc %s autotune: dc_time=%d dc_sg=%d",
+                     self.name, dc_time, dc_sg)
+        self.fields.set_field("dc_time", dc_time)
+        self.fields.set_field("dc_sg", dc_sg)
     # Subclass hook --------------------------------------------------------
     def apply_current(self, print_time):
         raise NotImplementedError(

@@ -41,8 +41,10 @@ class MotorConstants:
     def maxpwmrps(self, fclk=12.5e6, steps=0, volts=24.0, current=0.0):
         if steps == 0:
             steps = self.S
+        # volts must be forwarded to pwmgrad; without it pwmgrad silently uses
+        # its 24V default and produces a wrong threshold for 48V / 56V configs.
         return ((255 - self.pwmofs(volts, current))
-                / (math.pi * self.pwmgrad(fclk, steps)))
+                / (math.pi * self.pwmgrad(fclk, steps, volts)))
 
     # Calculates the PWM frequency given clock frequency and target.
     # Source: TMC5160A page 60 ("Choices of PWM frequency for stealthChop").
@@ -58,6 +60,17 @@ class MotorConstants:
         # return the lowest available prescaler setting rather than 0,
         # which would cause a ZeroDivisionError in _configure_spreadcycle.
         return best
+
+    # Inverse of pwmfreq(): given a chosen prescaler enum, return the
+    # actual chopper frequency in Hz.  Used by _configure_pwm when the
+    # user pins driver_PWM_FREQ — the rest of autotune still needs the
+    # corresponding calc_freq.
+    def pwmfreq_to_hz(self, prescaler, fclk=12.5e6):
+        factor = {3: 2./410, 2: 2./512, 1: 2./683, 0: 2./1024}.get(prescaler)
+        if factor is None:
+            raise ValueError("pwm_freq prescaler must be 0..3, got %r"
+                             % (prescaler,))
+        return round(fclk * factor, 1)
 
     # Compute the chopper hysteresis (hstrt, hend) for the given operating
     # point.  Returns the two register values.  See TMC5160A datasheet for
@@ -87,6 +100,17 @@ class MotorConstants:
                      name, I, tblank * 1e6, tsd * 1e6,
                      cs, hysteresis, hstrt - 1, hend + 3)
         return hstrt - 1, hend + 3
+
+    # Compute the dcStep commutation reference pulse width based on
+    # motor inductance, supply voltage, and operating current.  AN-003
+    # §4 derives this from the time it takes one motor pole pair to
+    # traverse one full microstep at peak current.  Returns seconds.
+    def commutation_time(self, voltage, current):
+        import math
+        I = current * math.sqrt(2)
+        # Time to ramp from 0 to Ipeak through the motor inductance:
+        # t = L*I/V (single-pole RL approximation)
+        return self.L * I / voltage
 
 
 def load_config_prefix(config):
