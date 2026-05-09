@@ -1378,6 +1378,33 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#tuning-goals" class="md-nav__link">
+    Tuning goals
+  </a>
+  
+    <nav class="md-nav" aria-label="Tuning goals">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#goal-comparison-reference" class="md-nav__link">
+    Goal comparison reference
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pin-respecting-field-overrides" class="md-nav__link">
+    Pin-respecting field overrides
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tmc5160-tmc2240-driver-current" class="md-nav__link">
     TMC5160 / TMC2240 driver current
   </a>
@@ -1385,8 +1412,42 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#tmc5160-high-vs-sense-filter-filt_isense" class="md-nav__link">
+    TMC5160 high-VS sense filter (filt_isense)
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#tmc5160-short-detection-thresholds" class="md-nav__link">
     TMC5160 short-detection thresholds
+  </a>
+  
+    <nav class="md-nav" aria-label="TMC5160 short-detection thresholds">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#high-vs-safety-enforcement" class="md-nav__link">
+    High-VS safety enforcement
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tmc5160-dcstep-tuning-dcctrl" class="md-nav__link">
+    TMC5160 dcStep tuning (DCCTRL)
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#chopconf-boundary-validation" class="md-nav__link">
+    CHOPCONF boundary validation
   </a>
   
 </li>
@@ -1418,6 +1479,13 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#migration" class="md-nav__link">
+    Migration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#compatibility" class="md-nav__link">
     Compatibility
   </a>
@@ -1443,10 +1511,13 @@
 
 <h1 id="tmc-drivers">TMC Drivers<a class="headerlink" href="#tmc-drivers" title="Permanent link">&para;</a></h1>
 <h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
-<p>Trinamic's TMC stepper drivers (TMC2130, TMC2208/2209, TMC2240, TMC2660, TMC5160) expose dozens of tunable register fields that determine how the chopper switches the motor coils, how StallGuard reads back-EMF, and how the regulator quantises the run/hold/home currents. Stock Klipper exposes those fields for manual tuning. This fork adds three things on top of the stock driver layer:</p>
+<p>Trinamic's TMC stepper drivers (TMC2130, TMC2208/2209, TMC2240, TMC2660, TMC5160) expose dozens of tunable register fields that determine how the chopper switches the motor coils, how StealthChop crosses over to SpreadCycle, how StallGuard reads back-EMF, how CoolStep modulates current under load, and how the regulator quantises run/hold/home currents. Stock Klipper exposes those fields for manual tuning. This fork adds four things on top of the stock driver layer:</p>
 <ol>
 <li>
-<p><strong>A motor-data-driven autotuning subsystem</strong> that derives the chopper, hysteresis, StallGuard, CoolStep, overvoltage, and high-velocity register fields from the motor's electrical specification (resistance, inductance, holding torque, rated current) plus the supply voltage. You point a TMC stepper at a <code>[motor_constants &lt;name&gt;]</code> section and a <code>voltage:</code> value; everything else is computed at every (re-)apply of the run current.</p>
+<p><strong>A motor-data-driven autotuning subsystem</strong> that derives the chopper, hysteresis, StallGuard, CoolStep, overvoltage, high-velocity, dcStep, and PWM register fields from the motor's electrical specification (resistance, inductance, holding torque, rated current) plus the supply voltage. You point a TMC stepper at a <code>[motor_constants &lt;name&gt;]</code> section and a <code>voltage:</code> value; everything else is computed at every (re-)apply of the run current.</p>
+</li>
+<li>
+<p><strong>Three named tuning goals — <code>performance</code>, <code>balanced</code>, <code>silent</code></strong> — selectable per stepper via <code>tuning_goal:</code>. The goal is the macro-level lever above the register fields: it expresses <em>what the user wants</em> (max acceleration / daily-driver / minimum noise) and the autotune translates that intent into ~30 coordinated register choices. Default is <code>balanced</code>.</p>
 </li>
 <li>
 <p><strong>A per-stepper homing profile</strong> that swaps the chopper, CoolStep, and IRUN/IHOLD bits to a low-noise / robust-StallGuard configuration for the duration of every homing move, then restores the autotuned run profile afterwards. Independent of the existing <code>home_current</code> swap — the chopper change happens even when <code>home_current == run_current</code>, because StallGuard noise is a separate concern.</p>
@@ -1456,11 +1527,14 @@
 </li>
 </ol>
 <p>The autotune is <strong>opt-in</strong>: drivers that don't specify both <code>motor:</code> and <code>voltage:</code> keep stock Klipper behaviour. The homing profile is automatic when set up via the workflow above.</p>
+<p>The tuning subsystem follows a <strong>convention-over-configuration paradigm with explicit user pins</strong>: the <code>tuning_goal:</code> selects a coherent set of defaults, and any individual register field can be pinned via <code>driver_X:</code> to override the goal-derived value. The autotune then computes the remaining (unpinned) values around the user's pin. You never have to choose between "all-default" and "set everything by hand" — pin the fields you have an opinion on, let the autotune solve for the rest.</p>
 <h2 id="when-to-use-this">When to use this<a class="headerlink" href="#when-to-use-this" title="Permanent link">&para;</a></h2>
 <ul>
-<li>You are configuring a printer with new motors and don't want to hand-pick TMC chopper / hysteresis / StallGuard parameters from the datasheet. Set <code>motor:</code> and <code>voltage:</code> and let the driver tune itself for the operating point.</li>
+<li>You are configuring a printer with new motors and don't want to hand-pick TMC chopper / hysteresis / StallGuard / PWM / CoolStep parameters from the datasheet. Set <code>motor:</code> and <code>voltage:</code>, optionally <code>tuning_goal:</code>, and let the driver tune itself for the operating point.</li>
+<li>You are torn between "max torque" and "quiet" and want to flip between them per axis without rewriting your TMC config — set <code>tuning_goal: performance</code> on X/Y, <code>tuning_goal: silent</code> on Z and E.</li>
 <li>You see noisy or jittery StallGuard triggers and want a cleaner homing signal without giving up your full printing current.</li>
 <li>You run TMC5160 or TMC2240 with a sense_resistor / Rref combination where the previous current math saturated IRUN at 31 with a small GLOBALSCALER, producing audible quantisation noise at low currents (a common complaint on lower-<code>Rref</code> TMC2240 boards).</li>
+<li>You run TMC5160 at a high supply voltage (above 52 V) and want the driver to enforce the datasheet's short-detection requirements rather than trust the chip's OTP defaults.</li>
 <li>You have a stepstick (BTT EZ5160, FYSETC 5161, Mellow Fly, …) where you'd rather reference the carrier-board model than look up <code>sense_resistor</code> and <code>max_current</code> from the silkscreen.</li>
 </ul>
 <p>You do not need any of this if your existing stock-Klipper TMC config is working and quiet. Autotune doesn't activate until both <code>motor:</code> and <code>voltage:</code> are set; the per-driver fixes only change behaviour at very low currents or with unusual <code>Rref</code> choices.</p>
@@ -1516,14 +1590,19 @@
 <td>Stepper supply voltage, 0–60 V. Required for back-EMF / PWM-grad math.</td>
 </tr>
 <tr>
+<td><code>tuning_goal</code></td>
+<td><code>balanced</code></td>
+<td><code>performance</code> / <code>balanced</code> / <code>silent</code>. See <em>Tuning goals</em> below.</td>
+</tr>
+<tr>
 <td><code>pwm_freq_target</code></td>
 <td>55 kHz (20 kHz on TMC2240)</td>
 <td>StealthChop PWM frequency target, 10–100 kHz. TMC2240 runs hot at the higher target so it defaults lower.</td>
 </tr>
 <tr>
 <td><code>chopper_freq_target</code></td>
-<td>20 kHz</td>
-<td>SpreadCycle target chopper frequency, 10–100 kHz. The autotune picks <code>TOFF</code> to land at or below this so the chopper sits just above the audible band.</td>
+<td>goal-aware (see <em>Tuning goals</em>)</td>
+<td>SpreadCycle target chopper frequency, 10–100 kHz. The autotune picks <code>TOFF</code> to land at or below this so the chopper sits just above the audible band. User pin always wins over the goal default.</td>
 </tr>
 <tr>
 <td><code>extra_hysteresis</code></td>
@@ -1536,13 +1615,257 @@
 <td>Programmed overvoltage trip in volts (0–60). When set, <code>OVERVOLTAGE_VTH</code> register is written.</td>
 </tr>
 <tr>
-<td><code>driver_TBL</code>, <code>driver_TOFF</code>, <code>driver_TPFD</code>, <code>driver_HSTRT</code>, <code>driver_HEND</code>, <code>driver_SGTHRS</code>, <code>driver_SGT</code>, <code>driver_cs</code></td>
+<td><code>coolstep_threshold</code></td>
 <td>unset</td>
-<td>Per-field manual override. When set, the autotune skips deriving that specific field and uses the value as-is. Mix and match — set the ones you want pinned and let the rest tune.</td>
+<td>Velocity (in mm/s) above which CoolStep activates. Translated to TCOOLTHRS in TSTEP units at config-time. Mutually exclusive with <code>driver_TCOOLTHRS:</code>.</td>
+</tr>
+<tr>
+<td><code>high_velocity_threshold</code></td>
+<td>unset</td>
+<td>Velocity (in mm/s) above which the high-velocity register set engages (THIGH). Mutually exclusive with <code>driver_THIGH:</code>.</td>
+</tr>
+<tr>
+<td><code>stealthchop_threshold</code></td>
+<td>unset</td>
+<td>Velocity (in mm/s) below which StealthChop is active. Translated to TPWMTHRS at config-time. Three-tier precedence: <code>driver_TPWMTHRS</code> &gt; <code>stealthchop_threshold</code> &gt; goal-default.</td>
 </tr>
 </tbody>
 </table>
 <p>The bundled <code>[motor_constants &lt;name&gt;]</code> sections (in <code>motor_database.cfg</code>) cover the major stepper-motor manufacturers: LDO, Moons, OMC, Stepperonline, Wantai, MOTECH, Trinamic, Phidgets, Soyo, BTT, BIQU, etc. Each section provides <code>resistance</code>, <code>inductance</code>, <code>holding_torque</code>, <code>max_current</code>, and <code>steps_per_revolution</code> from the manufacturer's datasheet.</p>
+<h3 id="tuning-goals">Tuning goals<a class="headerlink" href="#tuning-goals" title="Permanent link">&para;</a></h3>
+<p>The three tuning goals encapsulate three different operating points. Pick one per stepper based on what the axis is doing, not based on the motor type — the same motor wants different settings at the X/Y carriage versus the Z lead-screw.</p>
+<ul>
+<li><strong><code>performance</code></strong> — max acceleration / torque headroom. SpreadCycle dominant, dcStep + VHIGH-Fullstep active above THIGH so the driver keeps torque at top speed by switching to step-pulse-counting. Audible SpreadCycle hissing as background noise. Pick this for X/Y on a CoreXY when you push high accelerations and care about not skipping steps.</li>
+<li><strong><code>balanced</code></strong> (default) — daily-driver. StealthChop low-speed, SpreadCycle at print speed, no dcStep, smoothed CoolStep (<code>sfilt=1</code>, <code>iholddelay=10</code>) so coil current does not breathe under varying load. Pick this when you don't have a strong preference; it's a good compromise for hours-long prints. This is the default for any autotune-active stepper section without <code>tuning_goal:</code>.</li>
+<li><strong><code>silent</code></strong> — minimum audible noise. StealthChop until the physical PWM-tracking limit (1.2 × vmaxpwm), CoolStep disabled (<code>semin=0</code>) so there is no current-modulation noise, <code>small_hysteresis=1</code> for smoother microstep transitions, <code>TPFD=0</code> to remove passive-fast-decay artefacts, ultrasonic chopper target (45 kHz) above human hearing. Significantly reduced peak torque, no dcStep step-loss protection. Pick this for Z and extruder where audible noise dominates and the load is light.</li>
+</ul>
+<p>The goal is a <strong>starting point</strong>, not a constraint: any field listed in <em>Pin-respecting field overrides</em> below can be pinned via <code>driver_X:</code> to override the goal default. The autotune solves for the unpinned fields around your pin.</p>
+<h4 id="goal-comparison-reference">Goal comparison reference<a class="headerlink" href="#goal-comparison-reference" title="Permanent link">&para;</a></h4>
+<p>The following table is the canonical reference for what each goal sets at the register level. <strong>User pins via <code>driver_X</code> always override the goal default.</strong> Empty cells (<code>—</code>) are inactive in that goal because of an upstream gate (e.g. CoolStep fields when <code>semin=0</code>).</p>
+<table>
+<thead>
+<tr>
+<th>Aspect</th>
+<th><code>performance</code></th>
+<th><code>balanced</code> (default)</th>
+<th><code>silent</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>StealthChop / SpreadCycle crossover</strong></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>TPWMTHRS</td>
+<td><code>0xfffff</code> (StealthChop never)</td>
+<td><code>0.3 × vmaxpwm</code></td>
+<td><code>1.2 × vmaxpwm</code></td>
+</tr>
+<tr>
+<td>THIGH</td>
+<td><code>1.2 × vmaxpwm × rotation_distance</code></td>
+<td><code>0</code> (window open)</td>
+<td><code>0</code> (window open)</td>
+</tr>
+<tr>
+<td>vhighfs / vhighchm</td>
+<td>True / True (dcStep active)</td>
+<td>False / False</td>
+<td>False / False</td>
+</tr>
+<tr>
+<td>dc_time / dc_sg</td>
+<td>auto from motor (AN-003 §4)</td>
+<td>inactive (vhighchm=0)</td>
+<td>inactive</td>
+</tr>
+<tr>
+<td><strong>PWM tuning</strong></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>chopper_freq_target</td>
+<td>20 kHz</td>
+<td>35 kHz</td>
+<td>45 kHz (ultrasonic)</td>
+</tr>
+<tr>
+<td>pwm_reg</td>
+<td>15 (fast PI)</td>
+<td>8 (moderate)</td>
+<td>4 (smooth)</td>
+</tr>
+<tr>
+<td>pwm_lim</td>
+<td>4</td>
+<td>8</td>
+<td>12</td>
+</tr>
+<tr>
+<td>pwm_autoscale / pwm_autograd</td>
+<td>True / True</td>
+<td>True / True</td>
+<td>True / True</td>
+</tr>
+<tr>
+<td><strong>Hysteresis / resonance</strong></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>TPFD</td>
+<td>computed</td>
+<td>computed</td>
+<td>0</td>
+</tr>
+<tr>
+<td>small_hysteresis</td>
+<td>False</td>
+<td>False</td>
+<td>True</td>
+</tr>
+<tr>
+<td><strong>CoolStep</strong></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>semin</td>
+<td>2</td>
+<td>2</td>
+<td>0 (CoolStep off)</td>
+</tr>
+<tr>
+<td>semax</td>
+<td>4</td>
+<td>4</td>
+<td>—</td>
+</tr>
+<tr>
+<td>seup</td>
+<td>3</td>
+<td>3</td>
+<td>—</td>
+</tr>
+<tr>
+<td>sedn</td>
+<td>2</td>
+<td>2</td>
+<td>—</td>
+</tr>
+<tr>
+<td>seimin</td>
+<td>1 (¼ IRUN)</td>
+<td>1</td>
+<td>—</td>
+</tr>
+<tr>
+<td>sfilt</td>
+<td>0 (fast SG response)</td>
+<td>1 (smoothed)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><strong>Standstill</strong></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>iholddelay</td>
+<td>12</td>
+<td>10</td>
+<td>12</td>
+</tr>
+<tr>
+<td>tpowerdown</td>
+<td>10</td>
+<td>10</td>
+<td>10</td>
+</tr>
+<tr>
+<td><strong>GCONF flags</strong></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>faststandstill</td>
+<td>True</td>
+<td>True</td>
+<td>True</td>
+</tr>
+<tr>
+<td>multistep_filt</td>
+<td>True</td>
+<td>True</td>
+<td>True</td>
+</tr>
+</tbody>
+</table>
+<p><strong>THIGH and the CoolStep activation window:</strong> THIGH=0 keeps the CoolStep window open at all velocities. Per the TMC5160 datasheet, CoolStep is active when <code>TCOOLTHRS ≥ TSTEP &gt; THIGH</code>; with THIGH=0 the condition <code>TSTEP &gt; 0</code> is always satisfied, so CoolStep remains active up to the physical limit set by TCOOLTHRS. Using <code>THIGH=0xfffff</code> would close the window (TSTEP &gt; 0xfffff is essentially never true), suppressing CoolStep regardless of <code>semin</code>. This matches the Klipper upstream <code>TMCVhighHelper</code> convention (default THIGH=0). For <code>silent</code>, CoolStep is disabled via <code>semin=0</code> regardless; THIGH=0 is used for consistency with the upstream convention.</p>
+<h3 id="pin-respecting-field-overrides">Pin-respecting field overrides<a class="headerlink" href="#pin-respecting-field-overrides" title="Permanent link">&para;</a></h3>
+<p>Any of the following register fields can be pinned in the config via <code>driver_X:</code>. The autotune treats your pin as a hard constraint and computes the remaining (unpinned) values around it. This is the same mechanism that already existed for <code>driver_TBL/TOFF/TPFD/HSTRT/HEND/SGTHRS/SGT/cs</code>; what changed is that the driver now respects pins consistently across PWM, GCONF, CoolStep, and high-velocity registers as well.</p>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chopper</td>
+<td><code>driver_TBL</code>, <code>driver_TOFF</code>, <code>driver_TPFD</code>, <code>driver_HSTRT</code>, <code>driver_HEND</code></td>
+</tr>
+<tr>
+<td>StallGuard</td>
+<td><code>driver_SGTHRS</code>, <code>driver_SGT</code>, <code>driver_cs</code></td>
+</tr>
+<tr>
+<td>PWM / StealthChop</td>
+<td><code>driver_PWM_FREQ</code>, <code>driver_PWM_AUTOSCALE</code>, <code>driver_PWM_AUTOGRAD</code>, <code>driver_PWM_GRAD</code>, <code>driver_PWM_OFS</code>, <code>driver_PWM_REG</code>, <code>driver_PWM_LIM</code>, <code>driver_TPWMTHRS</code></td>
+</tr>
+<tr>
+<td>GCONF flags</td>
+<td><code>driver_FASTSTANDSTILL</code>, <code>driver_SMALL_HYSTERESIS</code>, <code>driver_MULTISTEP_FILT</code></td>
+</tr>
+<tr>
+<td>CoolStep + IHOLDDELAY</td>
+<td><code>driver_SEMIN</code>, <code>driver_SEMAX</code>, <code>driver_SEUP</code>, <code>driver_SEDN</code>, <code>driver_SEIMIN</code>, <code>driver_SFILT</code>, <code>driver_IHOLDDELAY</code></td>
+</tr>
+<tr>
+<td>Velocity thresholds + high-speed</td>
+<td><code>driver_TCOOLTHRS</code>, <code>driver_THIGH</code>, <code>driver_VHIGHFS</code>, <code>driver_VHIGHCHM</code></td>
+</tr>
+<tr>
+<td>TMC5160 DRV_CONF</td>
+<td><code>driver_FILT_ISENSE</code>, <code>driver_OTSELECT</code>, <code>driver_DRVSTRENGTH</code>, <code>driver_BBMTIME</code>, <code>driver_BBMCLKS</code></td>
+</tr>
+<tr>
+<td>TMC5160 DCCTRL (dcStep)</td>
+<td><code>driver_DC_TIME</code>, <code>driver_DC_SG</code></td>
+</tr>
+<tr>
+<td>TMC5160 SHORT_CONF</td>
+<td><code>driver_S2VS_LEVEL</code>, <code>driver_S2G_LEVEL</code>, <code>driver_SHORT_FILTER</code>, <code>driver_SHORTDELAY</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Three-tier precedence for velocity-form thresholds.</strong> The autotune resolves TCOOLTHRS, THIGH, and TPWMTHRS in this order:</p>
+<ol>
+<li>Raw register pin (<code>driver_TCOOLTHRS:</code>, <code>driver_THIGH:</code>, <code>driver_TPWMTHRS:</code>) — wins unconditionally.</li>
+<li>Velocity-form pin (<code>coolstep_threshold:</code>, <code>high_velocity_threshold:</code>, <code>stealthchop_threshold:</code>) — translated from mm/s to TSTEP at config-time.</li>
+<li>Goal-default — derived from motor and <code>tuning_goal:</code>.</li>
+</ol>
+<p>Setting both the raw pin and the velocity-form pin for the same threshold is mutually exclusive and raises a <code>config error</code> at boot — the driver tells the user which knob to pick rather than silently letting one win.</p>
 <h3 id="tmc5160-tmc2240-driver-current">TMC5160 / TMC2240 driver current<a class="headerlink" href="#tmc5160-tmc2240-driver-current" title="Permanent link">&para;</a></h3>
 <p>Both drivers gained two new options as part of the current-calculation rework.</p>
 <table>
@@ -1569,6 +1892,14 @@
 </tr>
 </tbody>
 </table>
+<h3 id="tmc5160-high-vs-sense-filter-filt_isense">TMC5160 high-VS sense filter (<code>filt_isense</code>)<a class="headerlink" href="#tmc5160-high-vs-sense-filter-filt_isense" title="Permanent link">&para;</a></h3>
+<p>Per TMC5160 datasheet §6, at supply voltages above 52 V the sense-line ringing during chopper switching is large enough that the chip's 1 µs <code>filt_isense</code> filter measurably cleans up hysteresis regulation. The driver now picks a VS-aware default:</p>
+<ul>
+<li><code>voltage &gt; 52 V</code> → <code>filt_isense = 1</code> (filter on)</li>
+<li><code>voltage ≤ 52 V</code> → <code>filt_isense = 0</code> (filter off, matches chip reset)</li>
+<li><code>driver_FILT_ISENSE:</code> overrides either default.</li>
+</ul>
+<p>This ships even when the autotune is off (no <code>motor:</code>); the driver re-reads <code>voltage:</code> at config-load time so a pure manual config still gets the high-VS-aware default.</p>
 <h3 id="tmc5160-short-detection-thresholds">TMC5160 short-detection thresholds<a class="headerlink" href="#tmc5160-short-detection-thresholds" title="Permanent link">&para;</a></h3>
 <p>TMC5160 only. Setting both fields programs the chip's <code>SHORT_CONF</code> register; setting one without the other is a config error because the chip's OTP defaults are not readable.</p>
 <table>
@@ -1593,6 +1924,43 @@
 </tbody>
 </table>
 <p>When set, also fills <code>short_filter</code> and <code>shortdelay</code> from defaults; can be overridden via <code>driver_short_filter</code> / <code>driver_shortdelay</code>.</p>
+<h4 id="high-vs-safety-enforcement">High-VS safety enforcement<a class="headerlink" href="#high-vs-safety-enforcement" title="Permanent link">&para;</a></h4>
+<p>Per TMC5160 datasheet §6.3, when the supply voltage exceeds 52 V the <code>s2g_level</code> field must be ≥ 12 to avoid false short-to-GND faults during normal high-voltage operation. The driver enforces this at boot:</p>
+<ul>
+<li><code>driver_S2G_LEVEL: &lt;value&gt;</code> with <code>&lt;value&gt; &lt; 12</code> and <code>voltage &gt; 52</code> raises a <code>config error</code> with a clear remediation message (raise the level, or lower the supply voltage).</li>
+<li><code>voltage &gt; 52</code> without explicit SHORT_CONF programming emits a startup warning. The chip's OTP defaults are usually workable but the datasheet recommends explicit programming. Silence the warning by setting both <code>driver_S2VS_LEVEL</code> (≥ 4) and <code>driver_S2G_LEVEL</code> (≥ 12).</li>
+</ul>
+<p>Pure footgun-prevention; no performance impact for properly-configured printers.</p>
+<h3 id="tmc5160-dcstep-tuning-dcctrl">TMC5160 dcStep tuning (DCCTRL)<a class="headerlink" href="#tmc5160-dcstep-tuning-dcctrl" title="Permanent link">&para;</a></h3>
+<p>dcStep is the TMC5160's step-loss-protection mode: above THIGH, with <code>vhighfs</code> and <code>vhighchm</code> both set, the chip uses load-angle feedback to count step pulses rather than rely on the chopper to deliver each microstep. The two tuning fields live in the DCCTRL register (<code>0x6E</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Auto-derived as</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dc_time</code></td>
+<td>motor commutation time, <code>t = L × Ipeak / V</code> (single-pole RL approximation)</td>
+<td>TMC AN-003 §4.1</td>
+</tr>
+<tr>
+<td><code>dc_sg</code></td>
+<td><code>dc_time / 16</code></td>
+<td>TMC AN-003 §4.2 default</td>
+</tr>
+</tbody>
+</table>
+<p><code>driver_DC_TIME:</code> and <code>driver_DC_SG:</code> override the derivation. Active under <code>tuning_goal: performance</code> where vhighfs and vhighchm are both enabled; the values are written for deterministic register state under <code>balanced</code> / <code>silent</code> but inactive there.</p>
+<h3 id="chopconf-boundary-validation">CHOPCONF boundary validation<a class="headerlink" href="#chopconf-boundary-validation" title="Permanent link">&para;</a></h3>
+<p>Two TMC5160 datasheet constraints are enforced at config-load time, regardless of whether the autotune is active:</p>
+<ul>
+<li><strong>TOFF=1 with TBL=0 is rejected</strong> (datasheet §5.2 CHOPCONF). When the user explicitly pins both <code>driver_TOFF: 1</code> and <code>driver_TBL: 0</code>, the driver raises a <code>config error</code> rather than silently bumping TBL to 1. When only one of the two is pinned, the autotune is allowed to correct the other.</li>
+<li><strong>dcStep with <code>TOFF &lt; 3</code> is rejected</strong> (datasheet §13.2). When <code>driver_VHIGHFS: 1</code>, <code>driver_VHIGHCHM: 1</code>, and <code>driver_TOFF: &lt;3&gt;</code> are all pinned, the driver raises a <code>config error</code> — dcStep needs at least three chopper cycles to establish load-angle feedback.</li>
+</ul>
 <h3 id="per-stepper-homing-profile">Per-stepper homing profile<a class="headerlink" href="#per-stepper-homing-profile" title="Permanent link">&para;</a></h3>
 <p>Applied around every homing move on this stepper section, regardless of whether sensorless homing is in use. The defaults are conservative low-noise SpreadCycle settings tuned for clean StallGuard reads. Each option overrides the corresponding default; unset means "use the bundled default".</p>
 <table>
@@ -1641,7 +2009,7 @@
 </tr>
 </tbody>
 </table>
-<p>The homing profile additionally turns CoolStep off (<code>semin/semax/seup/sedn/seimin = 0</code>), enables fast-standstill, and slows IHOLDDELAY to 8 — these aren't user-configurable but follow the same low-noise rationale.</p>
+<p>The homing profile additionally turns CoolStep off (<code>semin/semax/seup/sedn/seimin = 0</code>), enables fast-standstill, and slows IHOLDDELAY to 8 — these aren't user-configurable but follow the same low-noise rationale. The homing profile is orthogonal to <code>tuning_goal:</code> — both performance and silent steppers home with the same low-noise chopper config; only the run profile changes between goals.</p>
 <h2 id="minimal-example">Minimal example<a class="headerlink" href="#minimal-example" title="Permanent link">&para;</a></h2>
 <p>A single TMC2240-driven X axis on a BTT 2240 stepstick at 24 V, with autotuning, sensorless homing, and the per-stepper homing profile:</p>
 <div class="highlight"><pre><span></span><code><span class="k">[include motor_database.cfg]</span>
@@ -1654,6 +2022,7 @@
 
 <span class="na">motor</span><span class="o">:</span><span class="w"> </span><span class="s">ldo-42sth48-2504ah</span>
 <span class="na">voltage</span><span class="o">:</span><span class="w"> </span><span class="s">24</span>
+<span class="c1"># tuning_goal: balanced is the default</span>
 
 <span class="c1"># Optional manual overrides — leave commented to autotune.</span>
 <span class="c1"># driver_cs: 22</span>
@@ -1671,10 +2040,43 @@
 <span class="na">homing_speed</span><span class="o">:</span><span class="w"> </span><span class="s">50</span>
 </code></pre></div>
 
+<p>A TMC5160 axis configured for max acceleration with a custom dcStep sensitivity:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[tmc5160 stepper_x]</span>
+<span class="na">spi_bus</span><span class="o">:</span><span class="w"> </span><span class="s">spi1</span>
+<span class="na">cs_pin</span><span class="o">:</span><span class="w"> </span><span class="s">PA15</span>
+<span class="na">diag1_pin</span><span class="o">:</span><span class="w"> </span><span class="s">^!PE0</span>
+<span class="na">stepstick_type</span><span class="o">:</span><span class="w"> </span><span class="s">BTT_EZ_5160_PRO</span>
+<span class="na">sense_resistor</span><span class="o">:</span><span class="w"> </span><span class="s">0.075</span>
+
+<span class="na">motor</span><span class="o">:</span><span class="w"> </span><span class="s">ldo-42sth48-2504ac</span>
+<span class="na">voltage</span><span class="o">:</span><span class="w"> </span><span class="s">48</span>
+<span class="na">tuning_goal</span><span class="o">:</span><span class="w"> </span><span class="s">performance</span>
+
+<span class="na">driver_DC_SG</span><span class="o">:</span><span class="w"> </span><span class="s">16</span><span class="w">     </span><span class="c1"># tighten dcStep load-angle threshold</span>
+<span class="na">driver_S2VS_LEVEL</span><span class="o">:</span><span class="w"> </span><span class="s">6</span>
+<span class="na">driver_S2G_LEVEL</span><span class="o">:</span><span class="w"> </span><span class="s">12</span>
+
+<span class="na">run_current</span><span class="o">:</span><span class="w"> </span><span class="s">2.0</span>
+<span class="na">home_current</span><span class="o">:</span><span class="w"> </span><span class="s">0.8</span>
+</code></pre></div>
+
+<p>A TMC5160 Z lead-screw configured for absolute quiet, with CoolStep forced on despite the silent default:</p>
+<div class="highlight"><pre><span></span><code><span class="k">[tmc5160 stepper_z]</span>
+<span class="c1"># ... usual SPI / pins / sense_resistor ...</span>
+
+<span class="na">motor</span><span class="o">:</span><span class="w"> </span><span class="s">ldo-42sth48-2504ac</span>
+<span class="na">voltage</span><span class="o">:</span><span class="w"> </span><span class="s">48</span>
+<span class="na">tuning_goal</span><span class="o">:</span><span class="w"> </span><span class="s">silent</span>
+<span class="na">driver_SEMIN</span><span class="o">:</span><span class="w"> </span><span class="s">4</span><span class="w">      </span><span class="c1"># enable CoolStep; autotune picks SEMAX/SEUP/SEDN to fit</span>
+
+<span class="na">run_current</span><span class="o">:</span><span class="w"> </span><span class="s">0.8</span>
+<span class="na">home_current</span><span class="o">:</span><span class="w"> </span><span class="s">0.4</span>
+</code></pre></div>
+
 <h2 id="reading-the-autotune-log">Reading the autotune log<a class="headerlink" href="#reading-the-autotune-log" title="Permanent link">&para;</a></h2>
-<p>When autotune is active, <code>klippy.log</code> contains one summary line per phase per re-apply:</p>
+<p>When autotune is active, <code>klippy.log</code> contains one summary line per phase per re-apply. The <code>goal=</code> annotation on the PWM line shows which <code>tuning_goal</code> is in effect.</p>
 <div class="highlight"><pre><span></span><code>tmc stepper_x autotune: tuning for 1.400A at 24V (clock 12.500 MHz)
-tmc stepper_x autotune: pwm_freq=2 (~12.2 kHz) pwmgrad=43 pwmofs=27
+tmc stepper_x autotune (goal=balanced): pwm_freq=2 (~12.2 kHz) pwmgrad=43 pwmofs=27 pwm_reg=8 pwm_lim=8 tpwmthrs=812
 tmc stepper_x autotune: tbl=1 toff=4 tpfd=4
 tmc stepper_x autotune: Ipeak=1.980A tblank=2.88us tsd=11.68us cs=22 hysteresis=2 hstrt=2 hend=3
 </code></pre></div>
@@ -1683,12 +2085,60 @@ tmc stepper_x autotune: Ipeak=1.980A tblank=2.88us tsd=11.68us cs=22 hysteresis=
 <div class="highlight"><pre><span></span><code>tmc stepper_x homing: cs=8 gs=243 (raw 243) irun=8 ihold=8 (target 0.600A)
 </code></pre></div>
 
-<p>Use these to confirm the autotune picked sensible values for your operating point.</p>
+<p>Use these to confirm the autotune picked sensible values for your operating point, and to verify that switching <code>tuning_goal:</code> produced the register changes you expected.</p>
+<h2 id="migration">Migration<a class="headerlink" href="#migration" title="Permanent link">&para;</a></h2>
+<p>Configs without <code>motor:</code> / <code>voltage:</code> (autotune off) are bit-identical across the upgrade — the addition of static <code>set_config_field</code> defaults for fields like <code>tpwmthrs</code>, <code>faststandstill</code>, <code>filt_isense</code> only writes a value when the user pinned the corresponding <code>driver_X:</code>, so plain manual configs see no change.</p>
+<p>Configs with autotune ON (both <code>motor:</code> and <code>voltage:</code> set) but no explicit <code>tuning_goal:</code> now get <code>balanced</code> as the default. This differs from the previous max-performance behaviour at the following fields:</p>
+<table>
+<thead>
+<tr>
+<th>What was</th>
+<th>What is now (<code>balanced</code> default)</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TPWMTHRS = 0xfffff (SpreadCycle always)</td>
+<td>TPWMTHRS = 0.3 × vmaxpwm</td>
+<td>Noticeably quieter at low print speeds</td>
+</tr>
+<tr>
+<td>pwm_reg=15, pwm_lim=4</td>
+<td>pwm_reg=8, pwm_lim=8</td>
+<td>Smoother current behaviour, less PI overshoot</td>
+</tr>
+<tr>
+<td>sfilt=0</td>
+<td>sfilt=1</td>
+<td>More stable CoolStep, no "current breathing"</td>
+</tr>
+<tr>
+<td>iholddelay=12</td>
+<td>iholddelay=10</td>
+<td>Marginally faster hold-drop</td>
+</tr>
+<tr>
+<td>vhighfs / vhighchm active</td>
+<td>both off</td>
+<td>No dcStep / VHIGH-fullstep above THIGH</td>
+</tr>
+<tr>
+<td>chopper_freq_target = 20 kHz</td>
+<td>35 kHz</td>
+<td>Less SpreadCycle hissing, slightly more switching loss</td>
+</tr>
+</tbody>
+</table>
+<p><strong>If you were happy with the prior behaviour and want maximum performance, set <code>tuning_goal: performance</code> explicitly in your X/Y <code>[tmc5160 …]</code> sections.</strong> That gives you bit-identical behaviour to before.</p>
+<p>For Z and extruder, <code>tuning_goal: silent</code> is usually a strict upgrade unless you specifically rely on Z-axis CoolStep load modulation.</p>
 <h2 id="compatibility">Compatibility<a class="headerlink" href="#compatibility" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Existing TMC sections continue to work without changes as long as they specify <code>sense_resistor</code> (or <code>rref</code> for TMC2240) — the only mandatory tightening. Configs that previously relied on the implicit defaults need an explicit value or a <code>stepstick_type:</code> line added.</li>
-<li>All previous <code>driver_*</code> field overrides remain available and take precedence over autotune-derived values. You can adopt autotune incrementally by setting <code>motor:</code>/<code>voltage:</code> while keeping any per-field pins you've already validated.</li>
+<li>All previous <code>driver_*</code> field overrides remain available and take precedence over autotune-derived values. The expanded set in <em>Pin-respecting field overrides</em> extends, rather than replaces, the prior <code>driver_TBL/TOFF/TPFD/HSTRT/HEND/SGTHRS/SGT/cs</code> list.</li>
+<li>You can adopt the new tuning goals incrementally: leave existing axes untouched (they get <code>balanced</code>), set <code>tuning_goal: performance</code> on axes where the prior behaviour was specifically tuned for max torque.</li>
 <li>The per-stepper homing profile is always active. To disable it on a specific axis, set every <code>homing_*</code> option to the value the autotune would have written for the run profile.</li>
+<li>The CHOPCONF boundary validation (TOFF=1+TBL=0, dcStep+TOFF&lt;3) is unconditional and fires for autotune-OFF configs too. It only triggers when the user pins both fields of a violating combination explicitly; existing configs that rely on autotune to choose one of the two are unaffected.</li>
 </ul>
 
               
