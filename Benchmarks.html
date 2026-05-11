@@ -1251,6 +1251,61 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#host-benchmark-suite" class="md-nav__link">
+    Host Benchmark Suite
+  </a>
+  
+    <nav class="md-nav" aria-label="Host Benchmark Suite">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    Setup
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running" class="md-nav__link">
+    Running
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-measured" class="md-nav__link">
+    What Is Measured
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reading-the-comparison-view" class="md-nav__link">
+    Reading the Comparison View
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extending-the-suite" class="md-nav__link">
+    Extending the Suite
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#background" class="md-nav__link">
+    Background
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1694,6 +1749,61 @@
   <a href="#host-benchmarks" class="md-nav__link">
     Host Benchmarks
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#host-benchmark-suite" class="md-nav__link">
+    Host Benchmark Suite
+  </a>
+  
+    <nav class="md-nav" aria-label="Host Benchmark Suite">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    Setup
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running" class="md-nav__link">
+    Running
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-is-measured" class="md-nav__link">
+    What Is Measured
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#reading-the-comparison-view" class="md-nav__link">
+    Reading the Comparison View
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#extending-the-suite" class="md-nav__link">
+    Extending the Suite
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#background" class="md-nav__link">
+    Background
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -2529,6 +2639,196 @@ large and complex G-Code file and timing how long it takes for the
 host software to process it. For example:</p>
 <div class="highlight"><pre><span></span><code>time ~/klippy-env/bin/python ./klippy/klippy.py config/example-cartesian.cfg -i something_complex.gcode -o /dev/null -d out/klipper.dict
 </code></pre></div>
+
+<h2 id="host-benchmark-suite">Host Benchmark Suite<a class="headerlink" href="#host-benchmark-suite" title="Permanent link">&para;</a></h2>
+<p><code>test/benchmarks/</code> contains a pytest-based benchmark suite that measures
+host-side hot-path performance. It is not part of regular CI; use it to
+verify that a change to <code>klippy/chelper/</code>, <code>klippy/toolhead.py</code>, or
+related code does not regress runtime performance before merging.</p>
+<h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h3>
+<p>Run the bootstrap script from the repository root:</p>
+<div class="highlight"><pre><span></span><code>bash<span class="w"> </span>scripts/init_benchmarks.sh
+</code></pre></div>
+
+<p>This creates <code>.bench-venv/</code>, installs all required Python packages
+(<code>pytest</code>, <code>pytest-benchmark</code>, <code>cffi</code>, <code>jinja2</code>, <code>pyserial</code>,
+<code>greenlet</code>), builds the Linux-MCU klipper firmware to obtain the
+chelper dictionary, and captures an initial baseline. The script is
+re-runnable: existing artifacts are reused. Pass <code>--rebuild</code> to wipe
+and rebuild the venv and dictionary (useful when Python deps drift or
+the klipper source changes). Pass <code>--no-baseline</code> to skip baseline
+capture and keep the checked-in reference untouched.</p>
+<p><strong>Manual setup</strong> (fallback if the script does not fit your environment):</p>
+<p>Python 3.10+ is required. A virtual environment is optional but
+recommended:</p>
+<div class="highlight"><pre><span></span><code>python<span class="w"> </span>-m<span class="w"> </span>venv<span class="w"> </span>.bench-venv
+<span class="nb">source</span><span class="w"> </span>.bench-venv/bin/activate<span class="w">          </span><span class="c1"># Windows: .bench-venv\Scripts\activate</span>
+pip<span class="w"> </span>install<span class="w"> </span>pytest<span class="w"> </span>pytest-benchmark<span class="w"> </span>cffi<span class="w"> </span>jinja2<span class="w"> </span>pyserial<span class="w"> </span>greenlet
+</code></pre></div>
+
+<p>Build the Linux-MCU chelper dictionary that the benchmark fixtures load:</p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>distclean
+<span class="nb">echo</span><span class="w"> </span><span class="s1">&#39;CONFIG_MACH_LINUX=y&#39;</span><span class="w"> </span>&gt;<span class="w"> </span>.config
+make<span class="w"> </span>olddefconfig
+make
+mkdir<span class="w"> </span>-p<span class="w"> </span>test/benchmarks/dict
+cp<span class="w"> </span>out/klipper.dict<span class="w"> </span>test/benchmarks/dict/bench.dict
+</code></pre></div>
+
+<h3 id="running">Running<a class="headerlink" href="#running" title="Permanent link">&para;</a></h3>
+<p>All three modes are invoked through <code>scripts/run_benchmarks.sh</code>. Run
+from the repository root.</p>
+<p><strong>Record a new baseline</strong> (do this once before making changes):</p>
+<div class="highlight"><pre><span></span><code>bash<span class="w"> </span>scripts/run_benchmarks.sh<span class="w"> </span>--save<span class="o">=</span>baseline
+</code></pre></div>
+
+<p><strong>Compare current code against the stored baseline</strong> (default mode):</p>
+<div class="highlight"><pre><span></span><code>bash<span class="w"> </span>scripts/run_benchmarks.sh
+</code></pre></div>
+
+<p><strong>Integration test only</strong> (skips the pytest microbenchmarks, runs only
+the end-to-end klippy profile):</p>
+<div class="highlight"><pre><span></span><code>bash<span class="w"> </span>scripts/run_benchmarks.sh<span class="w"> </span>--integration
+</code></pre></div>
+
+<p><strong>Suppress ANSI colour output</strong> (useful in CI logs or when redirecting
+to a file):</p>
+<div class="highlight"><pre><span></span><code>bash<span class="w"> </span>scripts/run_benchmarks.sh<span class="w"> </span>--no-color
+</code></pre></div>
+
+<h3 id="what-is-measured">What Is Measured<a class="headerlink" href="#what-is-measured" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Layer</th>
+<th>What it exercises</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>itersolve.cruise</td>
+<td>chelper</td>
+<td><code>itersolve</code> over a 1 s constant-velocity cruise at 200 mm/s (~640 K steps)</td>
+</tr>
+<tr>
+<td>itersolve.accel</td>
+<td>chelper</td>
+<td><code>itersolve</code> over a 1.5 s accel-cruise-decel profile (0→200→0 mm/s)</td>
+</tr>
+<tr>
+<td>stepcompress.accel</td>
+<td>chelper</td>
+<td><code>stepcompress</code> + <code>itersolve</code> over a pure-acceleration (quadratic) move</td>
+</tr>
+<tr>
+<td>lookahead.short</td>
+<td>toolhead</td>
+<td><code>LookAheadQueue.flush</code> over 5 000 short alternating-direction moves</td>
+</tr>
+<tr>
+<td>I1</td>
+<td>integration</td>
+<td><code>klippy --debugoutput</code> processing a high-velocity short-segment job</td>
+</tr>
+</tbody>
+</table>
+<p><code>itersolve.cruise</code> and <code>itersolve.accel</code> isolate the <code>itersolve</code> path in
+<code>klippy/chelper/itersolve.c</code>. <code>stepcompress.accel</code> adds the quadratic-compression path in
+<code>stepcompress.c</code>. <code>lookahead.short</code> exercises the junction-deviation arithmetic in
+<code>klippy/toolhead.py</code>. I1 is a full host-pipeline run; it catches
+regressions that microbenchmarks miss because they interact at the
+scheduler and serialqueue layers.</p>
+<h3 id="reading-the-comparison-view">Reading the Comparison View<a class="headerlink" href="#reading-the-comparison-view" title="Permanent link">&para;</a></h3>
+<p>After a run the script prints a horizontal-bar comparison for each
+benchmark. Example (colour stripped):</p>
+<div class="highlight"><pre><span></span><code>itersolve.cruise  constant velocity, 1 s
+  baseline :  12 450 ops/s
+  current  :  13 200 ops/s
+  delta    : +6.1 %
+  ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░|████████░░░░░░░░░░░░░░░░░░░░░░░░
+  verdict  : fast
+</code></pre></div>
+
+<p>The bar centre (<code>|</code>) represents zero change. Filled blocks (<code>█</code>) extend
+right for improvements and left for regressions. The scale is
+±50 % across the full bar width.</p>
+<p><strong>Verdict thresholds:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Delta</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>≥ +20 %</td>
+<td>FAST</td>
+</tr>
+<tr>
+<td>+5 .. +20 %</td>
+<td>fast</td>
+</tr>
+<tr>
+<td>±5 %</td>
+<td>same</td>
+</tr>
+<tr>
+<td>-5 .. -20 %</td>
+<td>slow</td>
+</tr>
+<tr>
+<td>≤ -20 %</td>
+<td>SLOW</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Sign convention:</strong> a positive delta always means the current code is
+<em>faster</em>, regardless of the underlying metric. For throughput benchmarks
+(ops/s) the sign is direct. For the integration wallclock (I1) the sign
+is inverted — lower elapsed time is reported as a positive improvement.
+This is stated in the comparison output header so there is no ambiguity.</p>
+<h3 id="extending-the-suite">Extending the Suite<a class="headerlink" href="#extending-the-suite" title="Permanent link">&para;</a></h3>
+<p><strong>Add a new microbenchmark file</strong> under <code>test/benchmarks/</code>. The function
+name must start with <code>bench_</code> and accept <code>benchmark</code> plus any fixtures
+declared in <code>test/benchmarks/conftest.py</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">pytest</span>
+
+<span class="nd">@pytest</span><span class="o">.</span><span class="n">mark</span><span class="o">.</span><span class="n">benchmark</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">bench_my_thing</span><span class="p">(</span><span class="n">benchmark</span><span class="p">,</span> <span class="n">cffi_lib</span><span class="p">):</span>
+    <span class="n">ffi</span><span class="p">,</span> <span class="n">lib</span> <span class="o">=</span> <span class="n">cffi_lib</span>
+    <span class="c1"># ... set up state ...</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">run</span><span class="p">():</span>
+        <span class="n">lib</span><span class="o">.</span><span class="n">my_new_function</span><span class="p">(</span><span class="o">...</span><span class="p">)</span>
+    <span class="n">benchmark</span><span class="o">.</span><span class="n">pedantic</span><span class="p">(</span><span class="n">run</span><span class="p">,</span> <span class="n">rounds</span><span class="o">=</span><span class="mi">50</span><span class="p">,</span> <span class="n">iterations</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">warmup_rounds</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
+    <span class="n">benchmark</span><span class="o">.</span><span class="n">extra_info</span><span class="p">[</span><span class="s2">&quot;primary_metric&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;ops&quot;</span>
+</code></pre></div>
+
+<p><strong>Register the display name</strong> in two places (a known minor maintenance
+cost — both must be kept in sync):</p>
+<ol>
+<li>
+<p><code>test/benchmarks/conftest.py</code> — add an entry to <code>TEST_ID_MAP</code>:</p>
+<p><code>python
+ "bench_my_thing": ("mycomponent.variant", "my thing description"),</code></p>
+</li>
+<li>
+<p><code>scripts/bench_compare.py</code> — add the identical entry to the
+   <code>TEST_ID_MAP</code> defined there (the comparison script runs independently
+   of pytest and needs the mapping to label its output).</p>
+</li>
+</ol>
+<h3 id="background">Background<a class="headerlink" href="#background" title="Permanent link">&para;</a></h3>
+<p>The suite provides repeatable regression detection on the host-side hot
+paths that matter most for print quality and throughput: the <code>itersolve</code>
+step-generation loop in <code>klippy/chelper/itersolve.c</code>, the quadratic
+compression path in <code>stepcompress.c</code>, and the junction-deviation
+lookahead arithmetic in <code>klippy/toolhead.py</code>. These paths are
+exercised on every move and small regressions compound at print speed.
+The end-to-end integration test (I1) catches host-pipeline regressions
+— such as scheduler or serialqueue overhead — that are invisible to
+isolated microbenchmarks.</p>
 
               
             </article>

@@ -13,7 +13,7 @@
     
     
       
-        <title>THEOS Klipper Fork - Klipper documentation</title>
+        <title>Profile-Guided Build - Klipper documentation</title>
       
     
     
@@ -74,7 +74,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#theos-klipper-fork" class="md-skip">
+        <a href="#profile-guided-build" class="md-skip">
           Skip to content
         </a>
       
@@ -106,7 +106,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              THEOS Klipper Fork
+              Profile-Guided Build
             
           </span>
         </div>
@@ -1342,8 +1342,57 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#fork-specific-features" class="md-nav__link">
-    Fork-specific features
+  <a href="#what-this-is" class="md-nav__link">
+    What this is
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#how-the-build-cycle-works" class="md-nav__link">
+    How the build cycle works
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#update-workflow" class="md-nav__link">
+    Update workflow
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-you-might-notice-as-a-user" class="md-nav__link">
+    What you might notice as a user
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration" class="md-nav__link">
+    Configuration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#manually-retraining-the-profile" class="md-nav__link">
+    Manually retraining the profile
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#things-to-know" class="md-nav__link">
+    Things to know
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#credits" class="md-nav__link">
+    Credits
   </a>
   
 </li>
@@ -1360,39 +1409,83 @@
             <article class="md-content__inner md-typeset">
               
                 
-<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/README.md" title="Edit this page" class="md-content__button md-icon">
+<a href="https://github.com/Klipper3d/klipper/blob/master/docs/THEOS_Features/pgo_build.md" title="Edit this page" class="md-content__button md-icon">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20.71 7.04c.39-.39.39-1.04 0-1.41l-2.34-2.34c-.37-.39-1.02-.39-1.41 0l-1.84 1.83 3.75 3.75M3 17.25V21h3.75L17.81 9.93l-3.75-3.75L3 17.25z"/></svg>
 </a>
 
 
-<h1 id="theos-klipper-fork">THEOS Klipper Fork<a class="headerlink" href="#theos-klipper-fork" title="Permanent link">&para;</a></h1>
-<p>A fork of <a href="https://www.klipper3d.org/">Klipper</a> maintained by Matt The Printing Nerd, bundling additional features used by the <a href="https://github.com/MSzturc/THEOS">THEOS</a> printer operating system on top of stock Klipper.</p>
-<p>The core Klipper experience is unchanged: if you already run Klipper, everything you know still applies. Stock documentation at <a href="https://www.klipper3d.org/">klipper3d.org</a> remains authoritative for installation, kinematics, tuning, and everything not listed below.</p>
-<h2 id="fork-specific-features">Fork-specific features<a class="headerlink" href="#fork-specific-features" title="Permanent link">&para;</a></h2>
+<h1 id="profile-guided-build">Profile-Guided Build<a class="headerlink" href="#profile-guided-build" title="Permanent link">&para;</a></h1>
+<h2 id="what-this-is">What this is<a class="headerlink" href="#what-this-is" title="Permanent link">&para;</a></h2>
+<p>The host-side C helper (<code>klippy/chelper/c_helper.so</code>) — which handles step compression, kinematic step generation (itersolve), and the trapezoidal motion queue — is compiled with <strong>profile-guided optimization (PGO)</strong>. Branch and loop counters from real klippy runs are recorded and fed back into the next compile, letting GCC inline aggressively, lay out hot basic blocks for the instruction cache, and demote cold paths.</p>
+<p>The optimization is fully automatic. There are no <code>printer.cfg</code> keys, no opt-in flags, no manual commands. The chelper rebuilds itself across two <code>klipper</code> service starts.</p>
+<p>Typical magnitude on host hot paths:</p>
+<table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Speedup vs. non-PGO</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>itersolve (step time generation)</td>
+<td>~10–25 %</td>
+</tr>
+<tr>
+<td>stepcompress</td>
+<td>~10 %</td>
+</tr>
+<tr>
+<td>toolhead lookahead</td>
+<td>~5–10 %</td>
+</tr>
+</tbody>
+</table>
+<p>Real magnitude depends on the SoC, kinematic mode, and workload. PGO supplements (does not replace) the existing <code>-O3 -flto -march=native</code> compile flags and the hot-path function attributes already present in the chelper sources.</p>
+<h2 id="how-the-build-cycle-works">How the build cycle works<a class="headerlink" href="#how-the-build-cycle-works" title="Permanent link">&para;</a></h2>
+<p>PGO is a two-stage build that bootstraps itself. Across two <code>klipper</code> service starts you go from "no profile" to "optimized binary" with no manual step in between.</p>
+<p><strong>Stage 1 — instrumented build.</strong> On a fresh install, no profile data exists. The first <code>klipper</code> start compiles <code>c_helper.so</code> with <code>-fprofile-generate</code>, producing an <em>instrumented</em> binary that records counters at runtime. This binary runs roughly 2–5 % slower than a regular build — measurable on a low-end SoC, invisible on faster boards. Counters are buffered in process memory; nothing is written to disk while klippy is running.</p>
+<p><strong>Counter write-out.</strong> When the <code>klipper</code> service stops cleanly (<code>RESTART</code>, <code>FIRMWARE_RESTART</code>, <code>sudo systemctl restart klipper</code>), the instrumented binary's exit handler flushes the counters as <code>*.gcda</code> files into <code>klippy/chelper/.pgo/</code>. Total store size is typically a few MB.</p>
+<p><strong>Stage 2 — optimized build.</strong> On the next <code>klipper</code> start, the build system sees the fresh counter files (their mtime is newer than the compiled <code>.so</code>) and recompiles <code>c_helper.so</code> with <code>-fprofile-use</code>, baking the counters into block layout, inlining decisions, and branch hints. From this point on, every <code>klipper</code> start runs the optimized binary, until something invalidates the profile.</p>
+<p>In short: <strong>after a fresh install or any chelper source update, the second service restart brings you to the fully optimized binary.</strong> Restart number 1 runs instrumented and trains; restart number 2 compiles optimized and runs from there.</p>
+<h2 id="update-workflow">Update workflow<a class="headerlink" href="#update-workflow" title="Permanent link">&para;</a></h2>
+<p>Klipper installs are typically updated via <code>git pull</code> — either through Moonraker's Update Manager or by hand. PGO interacts with updates differently depending on whether the update touches the C helper sources.</p>
+<p><strong>Updates that do not touch <code>klippy/chelper/*</code>.</strong> The vast majority of fork updates fall here: changes to <code>klippy/extras/*.py</code>, configuration helpers, docs, host scripts. The recorded profile is still valid for the unchanged C code. The chelper does not rebuild, the <code>.pgo/</code> store is left alone, and the next <code>klipper</code> start continues to run the same optimized binary you had before the pull.</p>
+<p><strong>Updates that touch <code>klippy/chelper/*.c</code> or <code>*.h</code>.</strong> The chelper records a SHA-256 hash of every C source and header file at training time and stores it as <code>klippy/chelper/.pgo/source.hash</code>. On the next <code>klipper</code> start after the update, the new file contents produce a different hash. The system detects the mismatch, discards the stored profile, and emits one log line:</p>
+<div class="highlight"><pre><span></span><code>chelper: discarding stale PGO profile (chelper sources changed since training)
+</code></pre></div>
+
+<p>The build then runs Stage 1 (instrumented) on that same start. The next service stop writes fresh counters that match the new code. The start after that runs Stage 2 (optimized). Two service restarts and you're back to the fully optimized binary.</p>
+<p>The auto-invalidate exists because the alternative — keeping a profile that partially mismatches the current code — silently degrades optimization on every changed function with no log line, no warning, no observable signal. It would slowly erode the performance benefit over many updates without anyone noticing.</p>
+<h2 id="what-you-might-notice-as-a-user">What you might notice as a user<a class="headerlink" href="#what-you-might-notice-as-a-user" title="Permanent link">&para;</a></h2>
+<p>For most users, PGO is invisible. The cases where it can be perceptible:</p>
 <ul>
-<li><a href="sensorless_homing.html"><strong>Sensorless Homing</strong></a> — StallGuard-based homing with per-rail <code>home_current</code>, <code>min_home_dist</code>, and <code>homing_accel</code>; guaranteed post-home current restore; multi-stepper-per-rail current swap. Based on work by Brandon Nance, Bea Nance, Rogerio Goncalves, and Zeanon on Kalico, re-derived on the current Klipper base.</li>
-<li><a href="reset_velocity_limit.html"><strong><code>RESET_VELOCITY_LIMIT</code> G-code</strong></a> — restores <code>max_velocity</code>, <code>max_accel</code>, <code>square_corner_velocity</code>, and <code>minimum_cruise_ratio</code> to their configured values in one call, undoing any runtime <code>SET_VELOCITY_LIMIT</code> / <code>M204</code> override. Based on Kalico PR #472 by Matt Szturc.</li>
-<li><a href="tmc_drivers.html"><strong>TMC Drivers</strong></a> — motor-data-driven autotuning of chopper/PWM/hysteresis/StallGuard/CoolStep, per-stepper low-noise homing profile, TMC5160 driver_cs and short_conf, TMC2240 driver_cs / current_range / mandatory rref, mandatory sense_resistor, stepstick lookup table. Combines Klipper3d PR #6644 (Honest Brothers), Kalico PRs #382/#444/#525/#556/#613, and original autotuning work.</li>
-<li><a href="configparser_extensions.html"><strong>ConfigParser Extensions</strong></a> — variable interpolation (<code>${section.option}</code>), arithmetic evaluation with <code>min</code>/<code>max</code>/<code>abs</code>/<code>round</code>, default values (<code>:default</code>, <code>:None</code>), printer.cfg-overrides-sub-configs semantics, conditional includes, variable references in <code>[include]</code> paths, recursive subfolder globs, escape syntax (<code>\${literal}</code>), and the <code>RELOAD_GCODE_MACROS</code> G-code. Based on Kalico PRs #448/#482/#753 by Frank Tackitt and original work by Matt Szturc.</li>
-<li><a href="fan_control.html"><strong>Fan Control</strong></a> — <code>min_power</code> duty floor and <code>power</code> status key for actual PWM duty; <code>initial_speed</code> for at-startup fan command; <code>control: curve</code> for <code>[temperature_fan]</code> with point-list interpolation and heating/cooling hysteresis; optional short <code>id:</code> alias for <code>SET_FAN_SPEED</code> on <code>[fan_generic]</code>; hardware-PWM shutdown handling and kick-start last-value reset. Based on Kalico PRs #44/#193/#433/#436/#466/#819 by Kubaracek, Zeanon, Frédéric Beaucamp, NokkOnEffect, and Rogerio Goncalves, plus original work by Matt Szturc.</li>
-<li><a href="heater-pid-autotune.html"><strong>PID Autotune (Adaptive Relay)</strong></a> — <code>PID_CALIBRATE</code> rewritten on the Taysom &amp; Sorensen iterative method with amplitude-based convergence and a verification heat-up; better suited to high-thermal-mass beds and chamber heaters than the stock single-cycle Åström-Hägglund tune. Based on Kalico PR #62 by Dan Sorensen.</li>
-<li><a href="heater-pid-velocity.html"><strong>Velocity-Form PID</strong></a> — <code>control: pid_v</code> selects a velocity-form PID alternative to the positional controller, with <code>SET_HEATER_PID</code> for runtime Kp/Ki/Kd retuning on either algorithm. Based on Kalico PR #47 by Dans98 and PRs #35/#98 for the <code>SET_HEATER_PID</code> command.</li>
-<li><a href="heater-pid-profiles.html"><strong>PID Profiles</strong></a> — per-heater named profiles for PID/PID-velocity/dual-loop gains and <code>smooth_time</code>, with <code>PID_PROFILE LOAD/SAVE/REMOVE</code>, profile-aware <code>PID_CALIBRATE</code>, and <code>SET_SMOOTH_TIME</code>. Based on Kalico PR #162 by Vladimir Vukicevic with follow-up fixes by Tomas Petrlik.</li>
-<li><a href="heater-dual-loop-pid.html"><strong>Dual-Loop PID</strong></a> — <code>control: dual_loop_pid</code> cascades an outer (load) loop into an inner (element) loop with a hard <code>inner_max_temp</code> ceiling, two-pass calibration via <code>PID_CALIBRATE</code>. Based on Kalico PR #735 by Zeanon with follow-up fixes in PRs #758 / #809.</li>
-<li><a href="heater-mpc.html"><strong>Model Predictive Control (MPC)</strong></a> — <code>control: mpc</code> model-predictive heater controller with <code>MPC_CALIBRATE</code> and live <code>MPC_SET</code> tuning, fan-tracking via <code>fan_ambient_transfer</code> breakpoints, filament-cooling load with <code>filament_diameter</code>/<code>density</code>/<code>heat_capacity</code>, virtual <code>mpc_block_temperature</code> and <code>mpc_ambient_temperature</code> sensors. Based on Lasse Dalegaard's Klipper-MPC implementation with calibration, live-tuning, and virtual-sensor extensions from Kalico PRs #447/#468/#517/#555/#708/#732/#775/#819.</li>
-<li><a href="heater-cold-extrude.html"><strong>Cold Extrude</strong></a> — Marlin-compatible <code>M302</code> and Klipper-native <code>COLD_EXTRUDE</code> for runtime override of <code>min_extrude_temp</code>, with a session-only enable flag and a persisted threshold update. Based on Kalico PR #750 by Zeanon, with the dual-sensor heater follow-up in PR #766.</li>
-<li><a href="heater-diagnostics.html"><strong>Heater Diagnostics</strong></a> — ADC out-of-range shutdowns now name the offending heater and report its <code>last_temp</code> against the configured <code>min_temp</code>/<code>max_temp</code>; <code>PrinterHeaters.lookup_heater</code> accepts the full section name as shorthand. Based on Kalico PRs #182 and #252 by Rogerio Goncalves.</li>
-<li><a href="bdsensor.html"><strong>BDSensor</strong></a> — in-tree integration of the contactless inductive bed-distance probe; <code>[BDsensor]</code> config section, <code>BDSENSOR_*</code> G-code commands, automatic firmware build (<code>src-y += BD_sensor.c</code>), and <code>[board_pins]</code> alias resolution on <code>sda_pin</code> / <code>scl_pin</code> / <code>endstop_pin</code>. Based on work by Mark Yue, integrated from upstream <code>new</code> branch HEAD <code>8d0f833</code>.</li>
-<li><a href="use_probe_xy_offsets.html"><strong><code>use_probe_xy_offsets</code> Config Key</strong></a> — explicit per-section override for whether <code>ProbePointsHelper</code>-based probing applies the probe's X/Y offsets, exposed on <code>[bed_mesh]</code>, <code>[bed_tilt]</code>, <code>[z_tilt]</code>, <code>[quad_gantry_level]</code>, <code>[delta_calibrate]</code>, and <code>[screws_tilt_adjust]</code>. Based on Kalico PR #500 by Rogerio Goncalves.</li>
-<li><a href="plugin_system.html"><strong>Plugin System</strong></a> — load extras from <code>klippy/plugins/</code> without marking the install dirty; supports both single-file and package-style plugins. Based on Kalico PRs #82 and #100 by Brandon Nance, with package-directory support by Uku.</li>
-<li><a href="log_rotation.html"><strong>Log Rotation</strong></a> — <code>--rotate-log-at-restart</code> startup flag and <code>LOG_ROLLOVER</code> G-code for explicit log rollover, alongside upstream's midnight rotation. Based on Kalico PRs #181 and #498 by Rogerio Goncalves.</li>
-<li><a href="gcode_shell_command.html"><strong>gcode_shell_command</strong></a> — <code>[gcode_shell_command &lt;name&gt;]</code> config sections expose configured shell commands as <code>RUN_SHELL_COMMAND CMD=&lt;name&gt;</code> G-code with timeouts, parameter passthrough, and streamed output. Based on Eric Callahan's original extension, brought into Kalico via PRs #71 and #777 by Rogerio Goncalves and Clifford.</li>
-<li><a href="autoload_modules.html"><strong>Autoload Modules</strong></a> — <code>[force_move]</code>, <code>[respond]</code>, and <code>[exclude_object]</code> are loaded by default with <code>enable_&lt;name&gt;</code> opt-out keys, removing common boilerplate from <code>printer.cfg</code>. Based on Kalico PRs #135 and #306 by Rogerio Goncalves and the respond-default change.</li>
-<li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
-<li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
-<li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
-<li><a href="pgo_build.html"><strong>Profile-Guided Build</strong></a> — the host C helper (<code>c_helper.so</code>) self-trains via two-stage profile-guided optimization across <code>klipper</code> service starts; profile auto-invalidates when chelper sources change so updates don't silently degrade optimization. Original work by Matt Szturc.</li>
+<li><strong>First boot of a fresh THEOS image, or first start after a chelper-touching update.</strong> That single klippy session runs the instrumented binary. On a Banana Pi M2 Zero or comparable low-end SoC, per-move host work is a few percent slower. Klipper still keeps up with normal print velocities; you may see slightly higher CPU usage in <code>htop</code>. Subsequent restarts run the optimized binary.</li>
+<li><strong>Disk usage.</strong> <code>~/klipper/klippy/chelper/.pgo/</code> typically holds 2–5 MB of counter and hash data. It is created on demand and wiped automatically on retraining.</li>
+<li><strong>Log line after chelper-touching updates.</strong> <code>chelper: discarding stale PGO profile (chelper sources changed since training)</code> is normal and expected. It is not a warning. It is the system announcing the retrain cycle.</li>
 </ul>
+<h2 id="configuration">Configuration<a class="headerlink" href="#configuration" title="Permanent link">&para;</a></h2>
+<p>None. PGO is always on for the chelper build.</p>
+<h2 id="manually-retraining-the-profile">Manually retraining the profile<a class="headerlink" href="#manually-retraining-the-profile" title="Permanent link">&para;</a></h2>
+<p>You should not need to do this in normal operation. The auto-invalidate handles source updates, and a single representative session is usually enough training. There is, however, no harm in retraining manually if you want a profile captured against a more representative workload than the one your printer ran during its last instrumented session:</p>
+<div class="highlight"><pre><span></span><code>rm<span class="w"> </span>-rf<span class="w"> </span>~/klipper/klippy/chelper/.pgo
+sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>klipper<span class="w">   </span><span class="c1"># Stage 1: instrumented build</span>
+<span class="c1"># (optional: run a representative print here to train against real workload)</span>
+sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>klipper<span class="w">   </span><span class="c1"># Stage 2: optimized build</span>
+</code></pre></div>
+
+<p>The first restart runs the instrumented binary. Anything you do during that klippy session — startup, idle, a homing move, a calibration, a real print — contributes counters when klippy stops. The second restart compiles the optimized binary based on what was captured.</p>
+<h2 id="things-to-know">Things to know<a class="headerlink" href="#things-to-know" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>The profile is per-machine.</strong> Counters are collected against this specific SoC's branch predictor, cache hierarchy, and instruction timings. If you clone an SD card to a different printer with a different SoC, the new printer's first <code>klipper</code> start will detect that the prior <code>.gcda</code> were captured on different hardware and silently retrain (the source hash matches but the counters are typically rejected by GCC's runtime check). Two stations running identical SoCs can share <code>.pgo/</code>, but it's rarely worth the trouble.</li>
+<li><strong><code>.pgo/</code> is gitignored.</strong> A <code>git pull</code> will not overwrite, remove, or conflict on the profile directory.</li>
+<li><strong>Counter write-out requires a clean klippy exit.</strong> A power cut mid-print does not produce profile data — the SIGKILL skips the exit handler that flushes counters. This is not harmful; that particular session simply contributes nothing to the next training cycle.</li>
+<li><strong>The instrumented binary still meets real-time deadlines.</strong> The 2–5 % overhead is on host computation, not MCU communication. Klipper continues to flush move chunks ahead of the MCU exactly as it does in the optimized build, and stepcompress continues to feed clocks at the configured rate.</li>
+<li><strong>No effect on MCU firmware.</strong> PGO applies only to the host-side C helper. The MCU firmware (<code>klipper.bin</code>, <code>klipper.elf</code>) is built by <code>make</code> as before, with its own optimization flags, and is entirely unaffected.</li>
+<li><strong>Compilation time.</strong> A full chelper rebuild adds ~1–2 seconds on x86 and ~5–10 seconds on a Banana Pi M2 Zero, both for Stage 1 and Stage 2. This is once per cycle, not per klippy start.</li>
+</ul>
+<h2 id="credits">Credits<a class="headerlink" href="#credits" title="Permanent link">&para;</a></h2>
+<p>Original work in this fork. Profile-guided optimization is a standard GCC feature; the contribution here is the self-bootstrapping wrapper that runs the two-stage build transparently across <code>klipper</code> service lifecycles, auto-detects fresh counters via mtime, and invalidates the profile on chelper source changes via a content hash check.</p>
 
               
             </article>
