@@ -318,13 +318,17 @@ stepper_oid_lookup_bd(uint8_t oid)
 
 void adjust_z_move(void)
 {
+	if (step_adj[0].steps_per_mm <= 0)
+		return;
 	struct stepper *s = stepper_oid_lookup_bd(step_adj[0].zoid);
 	int dir=0,dir_t=0;//down
+	if (!s)
+		return;
 	if(s->count){
 		//diff_step = 0;
 		return;
 	}
-		
+
 	if(diff_step>0){
 		diff_step--;
 		adjusted_step--;
@@ -333,42 +337,48 @@ void adjust_z_move(void)
 		diff_step++;
         adjusted_step++;
 	}
-	
+
 	for(int i=0;i<NUM_Z_MOTOR;i++){
 		if(step_adj[i].zoid==0)
 			continue;
 		s = stepper_oid_lookup_bd(step_adj[i].zoid);
+		if (!s)
+			continue;
 		dir=diff_step>0?0:1;
 		if(step_adj[i].invert_dir==1)
 			dir=dir?0:1;
         dir_t=!!(s->flags&SF_LAST_DIR);
 		if(dir_t != dir){
 			gpio_out_toggle_noirq(s->dir_pin);
-		} 
-		
-	} 
+		}
+
+	}
 	for(int i=0;i<NUM_Z_MOTOR;i++){
 		if(step_adj[i].zoid==0)
 			continue;
 		s = stepper_oid_lookup_bd(step_adj[i].zoid);
+		if (!s)
+			continue;
 		gpio_out_toggle_noirq(s->step_pin);
-		
-	} 
-	
+
+	}
+
 	for(int i=0;i<NUM_Z_MOTOR;i++){
 		if(step_adj[i].zoid==0)
 			continue;
 		s = stepper_oid_lookup_bd(step_adj[i].zoid);
+		if (!s)
+			continue;
 		dir=diff_step>0?0:1;
 		if(step_adj[i].invert_dir==1)
 			dir=dir?0:1;
         dir_t=!!(s->flags&SF_LAST_DIR);
 		if(dir_t != dir){
 			gpio_out_toggle_noirq(s->dir_pin);
-		} 
-		
-	} 
-	
+		}
+
+	}
+
 	///limite the adjust range
 	if(abs_bd(adjusted_step *1000 / step_adj[0].steps_per_mm,0)>RT_RANGE){//>+-0.3mm
 		//diff_step = 0;
@@ -476,21 +486,27 @@ void timer_bd_init(void)
 void timer_bd_uinit(void)
 {
     sched_del_timer(&bd_tim.time);
+	diff_step = 0;
+	adjusted_step = 0;
 	//output("timer_bd_uinit mcuoid=%c", oid_g);
 }
 
 void adust_Z_calc(uint16_t sensor_z,struct stepper *s)
 {
-   // BD_Data  
+   // BD_Data
     static int sensor_z_old=0;
-    if(step_adj[0].zoid==0 || step_adj[0].adj_z_range<=0 
+    if(step_adj[0].zoid==0 || step_adj[0].adj_z_range<=0
 		|| (step_adj[0].cur_z>step_adj[0].adj_z_range)
 		|| sensor_z>=380||BD_read_flag!=1018){
 
 		diff_step = 0;
     	return;
 	}
-	
+	if (step_adj[0].steps_per_mm <= 0) {
+		diff_step = 0;
+		return;
+	}
+
 	if(s->count){
 		//diff_step = 0;
 		return;
@@ -502,7 +518,7 @@ void adust_Z_calc(uint16_t sensor_z,struct stepper *s)
 		||sensor_z <= 5 ){
 		diff_step = -10 * step_adj[0].steps_per_mm/1000;
 	}
-	sensor_z = sensor_z_old;
+	sensor_z_old = sensor_z;
 	speed_smooth(diff_step);
 	//output("Z_Move_L mcuoid=%c diff_step=%c sen_z=%c cur_z=%c", oid_g,diff_step>0?diff_step:-diff_step,sensor_z,step_adj[0].cur_z);
     //
@@ -516,29 +532,47 @@ void
 cmd_RT_Live(uint32_t *args)
 {
     int cmd=args[1],dat=args[2];
-    if(cmd==CMD_Z_INDEX) // 1025  CMD_Z_INDEX
+    if(cmd==CMD_Z_INDEX) { // 1025  CMD_Z_INDEX
+        if (dat >= NUM_Z_MOTOR) {
+            z_index = NUM_Z_MOTOR;
+            return;
+        }
         z_index=dat;
+    }
     else if(cmd==CMD_CUR_Z){ //1026 CMD_CUR_Z
         step_adj[0].cur_z=dat;
 		diff_step = 0;
     }
     else if(cmd==CMD_ADJ_Z){ //1027  CMD_ADJ_Z
+        if (z_index >= NUM_Z_MOTOR)
+            return;
         step_adj[z_index].adj_z_range=dat;
 		if (step_adj[0].adj_z_range<50)
 			timer_bd_uinit();
 	    else if(step_adj[0].adj_z_range<=1000)//(step_adj[0].cur_z<=step_adj[z_index].adj_z_range)
 	        timer_bd_init();
     }
-    else if(cmd==CMD_DIR_INV) //1028  CMD_DIR_INV
+    else if(cmd==CMD_DIR_INV) { //1028  CMD_DIR_INV
+        if (z_index >= NUM_Z_MOTOR)
+            return;
         step_adj[z_index].invert_dir=dat;
+    }
     else if(cmd==CMD_STEP_MM){ //1029  CMD_STEP_MM
+        if (z_index >= NUM_Z_MOTOR)
+            return;
         step_adj[z_index].steps_per_mm=dat;
     }
     else if(cmd==CMD_ZOID){ //1030  CMD_ZOID
+        if (z_index >= NUM_Z_MOTOR)
+            return;
         step_adj[z_index].zoid=dat;
     }
     else if(cmd==CMD_RT_SAMPLE_TIME){ //1031  CMD_SAMPLE_TIME
-        RT_SAMPLE_TIME= timer_from_us(dat*1000);;
+        if (dat < 1)
+            dat = 1;
+        if (dat > 1000)
+            dat = 1000;
+        RT_SAMPLE_TIME= timer_from_us(dat*1000);
     }
 	else if(cmd==CMD_RT_RANGE){ //1032	CMD_SAMPLE_TIME
 		RT_RANGE= dat;

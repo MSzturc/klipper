@@ -278,8 +278,8 @@ class BDPrinterProbe:
     def _handle_command_error(self):
         try:
             self.multi_probe_end()
-        except:
-            raise Exception("Multi-probe end")
+        except Exception:
+            pass
 
     def multi_probe_begin(self):
         self.mcu_probe.multi_probe_begin()
@@ -1025,8 +1025,9 @@ class BDsensorEndstopWrapper:
                                     "Please check connection"%self.bdversion)
 
     def BD_calibrate(self, gcmd):
+        self.toolhead = self.printer.lookup_object('toolhead')
         if "V1." not in self.bdversion:
-            self.BD_version(self.gcode,20)
+            self.BD_version(gcmd, 20)
         if self.switch_mode == 1 and self.collision_calibrate == 1:
             self.collision_calibrating = 1
             #gcmd.respond_info("Homing")
@@ -1264,7 +1265,7 @@ class BDsensorEndstopWrapper:
             self.I2C_BD_send(CMD_REBOOT_SENSOR)
         elif cmd_bd == -9:
             self.I2C_BD_send(CMD_SWITCH_MODE)
-            self.I2C_BD_send(str(int(self.position_endstop * 100)))
+            self.I2C_BD_send(int(self.position_endstop * 100))
             self.gcode.respond_info("in switch mode, the endstop position is"
                                     "%.3f mm" % self.position_endstop)
             return
@@ -1569,7 +1570,7 @@ class BDsensorEndstopWrapper:
                     self.gcode.respond_info("warning:triggered at 0mm")
                 # time.sleep(0.1)
                 self.endstop_bdsensor_offset = 0
-                if self.sda_pin_num is not self.endstop_pin_num:
+                if self.sda_pin_num != self.endstop_pin_num:
                     self.endstop_bdsensor_offset = homepos[2] - self.bd_value
                     self.gcode.respond_info("offset of endstop to bdsensor %.3fmm"
                                             % self.endstop_bdsensor_offset)
