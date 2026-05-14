@@ -389,6 +389,11 @@ extruder_stepper_alloc(void)
     memset(es, 0, sizeof(*es));
     es->sk.calc_position_cb = extruder_calc_position;
     es->sk.active_flags = AF_X | AF_Y | AF_Z;
+    // With half_accel==0 move_dist == start_v*t, e_pos is affine in t, and
+    // pa_func evaluated at the constant cruise pa_velocity is constant in
+    // position.  Smoother and pa_model_integrate boundary spans are guarded
+    // by gen_steps_pre/post_active in the dispatcher.
+    es->sk.is_linear = 1;
     list_init(&es->pa_list);
     struct pressure_advance_params *pa_params = malloc(sizeof(*pa_params));
     memset(pa_params, 0, sizeof(*pa_params));

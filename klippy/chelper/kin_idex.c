@@ -41,6 +41,7 @@ dual_carriage_set_sk(struct stepper_kinematics *sk
             sk, struct dual_carriage_stepper, sk);
     dc->sk.calc_position_cb = dual_carriage_calc_position;
     dc->sk.active_flags = orig_sk->active_flags;
+    dc->sk.is_linear = orig_sk->is_linear;
     dc->orig_sk = orig_sk;
 }
 

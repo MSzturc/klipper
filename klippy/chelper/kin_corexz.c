@@ -36,5 +36,6 @@ corexz_stepper_alloc(char type)
     else if (type == '-')
         sk->calc_position_cb = corexz_stepper_minus_calc_position;
     sk->active_flags = AF_X | AF_Z;
+    sk->is_linear = 1;
     return sk;
 }

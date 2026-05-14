@@ -47,6 +47,7 @@ generic_cartesian_stepper_alloc(double a_x, double a_y, double a_z)
     struct generic_cartesian_stepper *cs = malloc(sizeof(*cs));
     memset(cs, 0, sizeof(*cs));
     cs->sk.calc_position_cb = generic_cartesian_stepper_calc_position;
+    cs->sk.is_linear = 1;
     generic_cartesian_stepper_set_coeffs(&cs->sk, a_x, a_y, a_z);
     return &cs->sk;
 }

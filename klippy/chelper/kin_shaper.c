@@ -345,6 +345,11 @@ input_shaper_set_sk(struct stepper_kinematics *sk
     else
         return -1;
     is->sk.active_flags = orig_sk->active_flags;
+    // For a linear inner kinematic the centred shaper pulse sum collapses
+    // to identity (shift_pulses normalises the centroid), and the smoother
+    // convolution of a linear input stays linear away from the move edge.
+    // Edge safety is enforced by gen_steps_pre/post_active in the dispatcher.
+    is->sk.is_linear = orig_sk->is_linear;
     is->orig_sk = orig_sk;
     is->sk.commanded_pos = orig_sk->commanded_pos;
     is->sk.last_flush_time = orig_sk->last_flush_time;

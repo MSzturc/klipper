@@ -47,5 +47,6 @@ cartesian_stepper_alloc(char axis)
         sk->calc_position_cb = cart_stepper_z_calc_position;
         sk->active_flags = AF_Z;
     }
+    sk->is_linear = 1;
     return sk;
 }

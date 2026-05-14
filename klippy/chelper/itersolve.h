@@ -23,6 +23,13 @@ struct stepper_kinematics {
 
     sk_calc_callback calc_position_cb;
     sk_post_callback post_cb;
+
+    // Set by allocators of kinematics whose calc_position_cb is affine in
+    // move_get_distance(m, t).  With m->half_accel == 0 the output is then
+    // affine in t and each step time can be solved with a single fdiv,
+    // skipping the per-step secant iteration.  Wrappers (input_shaper,
+    // dual_carriage) propagate this from the wrapped kinematic.
+    int is_linear;
 };
 
 int32_t itersolve_generate_steps(struct stepper_kinematics *sk

@@ -24,10 +24,10 @@ struct timepos {
 
 #define SEEK_TIME_RESET 0.000100
 
-// Generate step times for a portion of a move
+// Generate step times for a portion of a move via the secant solver.
 __attribute__((hot)) static int32_t
-itersolve_gen_steps_range(struct stepper_kinematics *sk, struct stepcompress *sc
-                          , struct move *m, double abs_start, double abs_end)
+gen_steps_range_secant(struct stepper_kinematics *sk, struct stepcompress *sc
+                       , struct move *m, double abs_start, double abs_end)
 {
     sk_calc_callback calc_position_cb = sk->calc_position_cb;
     double half_step = .5 * sk->step_dist;
@@ -125,6 +125,114 @@ itersolve_gen_steps_range(struct stepper_kinematics *sk, struct stepcompress *sc
     if (sk->post_cb)
         sk->post_cb(sk);
     return 0;
+}
+
+// Fast-path: generate step times for a portion of a linear cruise sub-move.
+// Caller must have established that sk->calc_position_cb is affine in t over
+// [abs_start, abs_end] -- i.e. sk->is_linear && m->half_accel == 0 and the
+// range stays clear of shaper/smoother edges (handled by the dispatcher).
+__attribute__((hot)) int32_t
+itersolve_gen_steps_range_cruise(struct stepper_kinematics *sk
+                                 , struct stepcompress *sc
+                                 , struct move *m
+                                 , double abs_start, double abs_end)
+{
+    sk_calc_callback calc_position_cb = sk->calc_position_cb;
+    double half_step = .5 * sk->step_dist;
+    double start = abs_start - m->print_time, end = abs_end - m->print_time;
+    if (start < 0.)
+        start = 0.;
+    if (end > m->move_t)
+        end = m->move_t;
+    if (start >= end)
+        return 0;
+
+    // pos(t) is affine on [start, end].  Two probes determine the slope.
+    double pos_start = calc_position_cb(sk, m, start);
+    double pos_end = calc_position_cb(sk, m, end);
+    double slope = (pos_end - pos_start) / (end - start);
+
+    if (slope == 0.) {
+        // No motion on this axis -- nothing to emit.
+        sk->commanded_pos = pos_start;
+        if (sk->post_cb)
+            sk->post_cb(sk);
+        return 0;
+    }
+
+    int sdir;
+    double target, step_delta;
+    if (slope > 0.) {
+        sdir = 1;
+        target = sk->commanded_pos + half_step;
+        step_delta = sk->step_dist;
+    } else {
+        sdir = 0;
+        target = sk->commanded_pos - half_step;
+        step_delta = -sk->step_dist;
+    }
+
+    double inv_slope = 1. / slope;
+    for (;;) {
+        double t_step = start + (target - pos_start) * inv_slope;
+        if (t_step >= end)
+            break;
+        if (unlikely(t_step < start))
+            t_step = start;
+        int ret = stepcompress_append(sc, sdir, m->print_time, t_step);
+        if (ret)
+            return ret;
+        target += step_delta;
+    }
+
+    sk->commanded_pos = target - (sdir ? half_step : -half_step);
+    if (sk->post_cb)
+        sk->post_cb(sk);
+    return 0;
+}
+
+// Dispatcher: pick the cruise fast-path when the kinematic is linear and the
+// sub-move is constant velocity, otherwise fall back to the secant solver.
+// For shaper/smoother-wrapped linear kinematics the safe interior is reduced
+// by gen_steps_pre/post_active; the edge regions remain on the secant path.
+__attribute__((hot)) static int32_t
+itersolve_gen_steps_range(struct stepper_kinematics *sk, struct stepcompress *sc
+                          , struct move *m, double abs_start, double abs_end)
+{
+    if (likely(sk->is_linear) && m->half_accel == 0.) {
+        double start = abs_start - m->print_time;
+        double end = abs_end - m->print_time;
+        if (start < 0.)
+            start = 0.;
+        if (end > m->move_t)
+            end = m->move_t;
+        double safe_lo = sk->gen_steps_post_active;
+        double safe_hi = m->move_t - sk->gen_steps_pre_active;
+        double cs = start > safe_lo ? start : safe_lo;
+        double ce = end < safe_hi ? end : safe_hi;
+        if (cs < ce) {
+            int32_t ret;
+            if (start < cs) {
+                ret = gen_steps_range_secant(sk, sc, m, abs_start
+                                             , m->print_time + cs);
+                if (ret)
+                    return ret;
+            }
+            ret = itersolve_gen_steps_range_cruise(sk, sc, m
+                                                   , m->print_time + cs
+                                                   , m->print_time + ce);
+            if (ret)
+                return ret;
+            if (ce < end) {
+                ret = gen_steps_range_secant(sk, sc, m, m->print_time + ce
+                                             , abs_end);
+                if (ret)
+                    return ret;
+            }
+            return 0;
+        }
+    }
+    return gen_steps_range_secant(sk, sc, m, abs_start, abs_end);
 }
 
 
