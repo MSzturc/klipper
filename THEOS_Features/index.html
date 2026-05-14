@@ -1391,7 +1391,6 @@
 <li><a href="jinja2_extensions.html"><strong>Jinja2 Extensions</strong></a> — <code>{% do %}</code>, <code>{% break %}</code>, and <code>{% continue %}</code> are enabled in the gcode_macro template environment. Based on Kalico PRs #26 by Morten Lindhardt and #442 by Frank Tackitt.</li>
 <li><a href="auto_reload.html"><strong>Auto Reload</strong></a> — <code>[auto_reload]</code> watches <code>printer.cfg</code> and triggers <code>RELOAD_GCODE_MACROS</code> on save. Original work by Matt Szturc.</li>
 <li><a href="restart_hook.html"><strong>Restart Hook</strong></a> — <code>~/printer_data/config/scripts/before-restart-klipper.sh</code> is executed best-effort between klippy restarts. Original work by Matt Szturc.</li>
-<li><a href="pgo_build.html"><strong>Profile-Guided Build</strong></a> — the host C helper (<code>c_helper.so</code>) self-trains via two-stage profile-guided optimization across <code>klipper</code> service starts; profile auto-invalidates when chelper sources change so updates don't silently degrade optimization. Original work by Matt Szturc.</li>
 </ul>
 
               
