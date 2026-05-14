@@ -80,7 +80,7 @@ syncemitter_queue_msg(struct syncemitter *se, uint64_t req_clock
 }
 
 // Generate steps (via itersolve) and flush
-static int32_t
+__attribute__((hot)) static int32_t
 se_generate_steps(struct syncemitter *se)
 {
     if (!se->sc || !se->sk)

@@ -25,7 +25,7 @@ struct timepos {
 #define SEEK_TIME_RESET 0.000100
 
 // Generate step times for a portion of a move
-static int32_t
+__attribute__((hot)) static int32_t
 itersolve_gen_steps_range(struct stepper_kinematics *sk, struct stepcompress *sc
                           , struct move *m, double abs_start, double abs_end)
 {

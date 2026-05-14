@@ -75,13 +75,13 @@ struct history_steps {
  * Step compression
  ****************************************************************/
 
-static inline int32_t
+static inline __attribute__((always_inline)) int32_t
 idiv_up(int32_t n, int32_t d)
 {
     return (n>=0) ? DIV_ROUND_UP(n,d) : (n/d);
 }
 
-static inline int32_t
+static inline __attribute__((always_inline)) int32_t
 idiv_down(int32_t n, int32_t d)
 {
     return (n>=0) ? (n/d) : (n - d + 1) / d;
@@ -93,7 +93,7 @@ struct points {
 
 // Given a requested step time, return the minimum and maximum
 // acceptable times
-static inline struct points
+static inline __attribute__((always_inline)) struct points
 minmax_point(struct stepcompress *sc, struct qstep *pos)
 {
     uint32_t lsc = sc->last_step_clock, point = pos->clock32 - lsc;
@@ -111,7 +111,7 @@ minmax_point(struct stepcompress *sc, struct qstep *pos)
 #define QUADRATIC_DEV 11
 
 // Find a 'step_move' that covers a series of step times
-static struct step_move
+__attribute__((hot)) static struct step_move
 compress_bisect_add(struct stepcompress *sc)
 {
     struct qstep *qlast = sc->queue_next;
