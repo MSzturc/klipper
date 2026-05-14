@@ -10,6 +10,7 @@
 #include <string.h> // memset
 #include "compiler.h" // ARRAY_SIZE
 #include "list.h" // list_add_tail
+#include "msgblock.h" // message_free
 #include "pollreactor.h" // PR_NEVER
 #include "pyhelper.h" // report_errno
 #include "serialqueue.h" // serialqueue_add_fastreader
@@ -200,7 +201,7 @@ trdispatch_mcu_alloc(struct trdispatch *td, struct serialqueue *sq
         state_prefix, ARRAY_SIZE(state_prefix));
     memcpy(tdm->fr.prefix, dummy->msg, dummy->len);
     tdm->fr.prefix_len = dummy->len;
-    free(dummy);
+    message_free(dummy);
     tdm->fr.func = handle_trsync_state;
 
     tdm->td = td;

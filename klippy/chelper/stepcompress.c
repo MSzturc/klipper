@@ -23,6 +23,7 @@
 #include "compiler.h" // DIV_ROUND_UP
 #include "pyhelper.h" // errorf
 #include "serialqueue.h" // struct queue_message
+#include "slab_pool.h" // slab_pool
 #include "stepcompress.h" // stepcompress_alloc
 
 #define CHECK_LINES 1
@@ -53,6 +54,7 @@ struct stepcompress {
     // History tracking
     int64_t last_position;
     struct list_head history_list;
+    struct slab_pool history_pool;
 };
 
 // Parameters of a single queue_step command
@@ -62,12 +64,17 @@ struct step_move {
     int16_t add;
 };
 
-// Storage for internal history of recently sent queue_step commands
+// Storage for internal history of recently sent queue_step commands.
+// Tail fields ('pool' and 'free_next') are slab_pool plumbing; they
+// must stay at the end of the struct to keep offsetof() stable for
+// any third-party consumer reading the prefix layout.
 struct history_steps {
     struct list_node node;
     uint64_t first_clock, last_clock;
     int64_t start_position;
     int step_count, interval, add;
+    struct slab_pool *pool;
+    struct history_steps *free_next;
 };
 
 
@@ -257,6 +264,9 @@ stepcompress_alloc(struct list_head *msg_queue)
     struct stepcompress *sc = malloc(sizeof(*sc));
     memset(sc, 0, sizeof(*sc));
     list_init(&sc->history_list);
+    slab_pool_init(&sc->history_pool, sizeof(struct history_steps),
+                   offsetof(struct history_steps, free_next),
+                   offsetof(struct history_steps, pool));
     sc->sdir = -1;
     sc->msg_queue = msg_queue;
     return sc;
@@ -295,7 +305,7 @@ stepcompress_history_expire(struct stepcompress *sc, uint64_t end_clock)
         if (hs->last_clock > end_clock)
             break;
         list_del(&hs->node);
-        free(hs);
+        slab_pool_free(&sc->history_pool, hs);
     }
 }
 
@@ -307,6 +317,7 @@ stepcompress_free(struct stepcompress *sc)
         return;
     free(sc->queue);
     stepcompress_history_expire(sc, UINT64_MAX);
+    slab_pool_destroy(&sc->history_pool);
     free(sc);
 }
 
@@ -363,7 +374,7 @@ add_move(struct stepcompress *sc, uint64_t first_clock, struct step_move *move)
     sc->last_step_clock = last_clock;
 
     // Create and store move in history tracking
-    struct history_steps *hs = malloc(sizeof(*hs));
+    struct history_steps *hs = slab_pool_alloc(&sc->history_pool);
     hs->first_clock = first_clock;
     hs->last_clock = last_clock;
     hs->start_position = sc->last_position;
@@ -578,8 +589,10 @@ stepcompress_set_last_position(struct stepcompress *sc, uint64_t clock
     sc->last_position = last_position;
 
     // Add a marker to the history list
-    struct history_steps *hs = malloc(sizeof(*hs));
-    memset(hs, 0, sizeof(*hs));
+    struct history_steps *hs = slab_pool_alloc(&sc->history_pool);
+    // Pool hands back uninitialized memory plus the trailing pool/free_next
+    // back-pointers; zero the user-visible prefix only.
+    memset(hs, 0, offsetof(struct history_steps, pool));
     hs->first_clock = hs->last_clock = clock;
     hs->start_position = last_position;
     list_add_head(&hs->node, &sc->history_list);

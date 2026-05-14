@@ -17,6 +17,9 @@
 #define MESSAGE_DEST 0x10
 #define MESSAGE_SYNC 0x7E
 
+// Forward decl — slab_pool.h owns the full definition.
+struct slab_pool;
+
 struct queue_message {
     int len;
     uint8_t msg[MESSAGE_MAX];
@@ -32,6 +35,11 @@ struct queue_message {
     };
     uint64_t notify_id;
     struct list_node node;
+    // Slab-pool plumbing.  pool == NULL means the object was obtained via
+    // plain malloc and must be returned via free().  free_next is only
+    // valid while the message sits on the pool's free stack.
+    struct slab_pool *pool;
+    struct queue_message *free_next;
 };
 
 struct clock_estimate {
@@ -43,6 +51,7 @@ uint16_t msgblock_crc16_ccitt(uint8_t *buf, uint8_t len);
 int msgblock_check(uint8_t *need_sync, uint8_t *buf, int buf_len);
 int msgblock_decode(uint32_t *data, int data_len, uint8_t *msg, int msg_len);
 struct queue_message *message_alloc(void);
+struct queue_message *message_alloc_pooled(void);
 struct queue_message *message_fill(uint8_t *data, int len);
 struct queue_message *message_alloc_and_encode(uint32_t *data, int len);
 void message_free(struct queue_message *qm);

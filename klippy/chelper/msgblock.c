@@ -9,6 +9,7 @@
 #include <string.h> // memset
 #include "msgblock.h" // message_alloc
 #include "pyhelper.h" // errorf
+#include "slab_pool.h" // slab_pool
 
 
 /****************************************************************
@@ -123,12 +124,58 @@ msgblock_decode(uint32_t *data, int data_len, uint8_t *msg, int msg_len)
  * Command queues
  ****************************************************************/
 
-// Allocate a 'struct queue_message' object
+// Global recycling pool for queue_message.  Shared across every
+// stepcompress / serialqueue producer because the lifetime of a single
+// pooled message can straddle multiple subsystems (bg-thread alloc in
+// stepcompress -> main-thread move in steppersync -> ack/free in serial
+// bg).  Pool-pro-stepcompress would race with that shutdown ordering.
+//
+// Lazy-initialized on first pooled alloc.  Process-lifetime; never
+// destroyed.  Leaks at exit are intentional and bounded by live-count.
+static struct slab_pool qm_pool;
+static int qm_pool_inited = 0;
+
+static void
+qm_pool_ensure(void)
+{
+    if (qm_pool_inited)
+        return;
+    slab_pool_init(&qm_pool, sizeof(struct queue_message),
+                   offsetof(struct queue_message, free_next),
+                   offsetof(struct queue_message, pool));
+    qm_pool_inited = 1;
+}
+
+// Reset the user-visible message fields on a freshly-handed-out object
+// (whether it came from the pool's freelist or the carve path).
+// Preserve the slab metadata trailing fields.
+static inline void
+qm_zero_userfields(struct queue_message *qm)
+{
+    memset(qm, 0, offsetof(struct queue_message, pool));
+}
+
+// Allocate a 'struct queue_message' object via glibc malloc.  Used by
+// call sites whose lifetime is irregular or single-use (notify dummies,
+// the input handler's transient receive buffers).
 struct queue_message *
 message_alloc(void)
 {
     struct queue_message *qm = malloc(sizeof(*qm));
     memset(qm, 0, sizeof(*qm));
+    return qm;
+}
+
+// Allocate from the global recycling pool.  Hot-path call sites in
+// stepcompress and steppersync use this.
+struct queue_message *
+message_alloc_pooled(void)
+{
+    qm_pool_ensure();
+    struct queue_message *qm = slab_pool_alloc(&qm_pool);
+    if (!qm)
+        return NULL;
+    qm_zero_userfields(qm);
     return qm;
 }
 
@@ -146,7 +193,7 @@ message_fill(uint8_t *data, int len)
 struct queue_message *
 message_alloc_and_encode(uint32_t *data, int len)
 {
-    struct queue_message *qm = message_alloc();
+    struct queue_message *qm = message_alloc_pooled();
     int i;
     uint8_t *p = qm->msg;
     for (i=0; i<len; i++) {
@@ -163,11 +210,14 @@ fail:
     return qm;
 }
 
-// Free the storage from a previous message_alloc() call
+// Return a queue_message to whichever allocator originally produced it.
 void
 message_free(struct queue_message *qm)
 {
-    free(qm);
+    if (qm->pool)
+        slab_pool_free(qm->pool, qm);
+    else
+        free(qm);
 }
 
 // Free all the messages on a queue
