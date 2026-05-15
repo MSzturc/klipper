@@ -67,6 +67,8 @@ class MCU_stepper:
                 self._handle_noncritical_reconnect)
     def get_mcu(self):
         return self._mcu
+    def get_syncemitter(self):
+        return self._syncemitter
     def get_name(self, short=False):
         if short and self._name.startswith('stepper'):
             # Skip an extra symbol after 'stepper'

@@ -55,6 +55,13 @@ struct stepcompress {
     int64_t last_position;
     struct list_head history_list;
     struct slab_pool history_pool;
+    // Twin-stepper deduplication: belt-coupled AWD steppers solve once
+    // (on the primary) and the step stream is mirrored into the twin's
+    // queue.  'append'/'commit' dispatch to the plain or the mirroring
+    // implementation; 'twin' is the mirror target (NULL unless primary).
+    stepcompress_append_fn append;
+    stepcompress_commit_fn commit;
+    struct stepcompress *twin;
 };
 
 // Parameters of a single queue_step command
@@ -269,6 +276,8 @@ stepcompress_alloc(struct list_head *msg_queue)
                    offsetof(struct history_steps, pool));
     sc->sdir = -1;
     sc->msg_queue = msg_queue;
+    sc->append = stepcompress_append;
+    sc->commit = stepcompress_commit;
     return sc;
 }
 
@@ -553,6 +562,44 @@ stepcompress_commit(struct stepcompress *sc)
     return 0;
 }
 
+// Mirror append: emit the step into this stepcompress and into its twin.
+// Used for belt-coupled AWD steppers -- the primary solves once and the
+// raw (pre-compression) step stream is replicated into the twin's queue.
+static int
+stepcompress_append_mirror(struct stepcompress *sc, int sdir
+                           , double print_time, double step_time)
+{
+    int ret = stepcompress_append(sc, sdir, print_time, step_time);
+    if (ret)
+        return ret;
+    return stepcompress_append(sc->twin, sdir, print_time, step_time);
+}
+
+static int
+stepcompress_commit_mirror(struct stepcompress *sc)
+{
+    int ret = stepcompress_commit(sc);
+    if (ret)
+        return ret;
+    return stepcompress_commit(sc->twin);
+}
+
+// Wire (twin != NULL) or unwire (twin == NULL) a primary -> twin mirror.
+// Called only while step generation is idle (config-time pairing, or the
+// cold force_move suspend/resume path).
+void
+stepcompress_set_twin(struct stepcompress *primary, struct stepcompress *twin)
+{
+    primary->twin = twin;
+    if (twin) {
+        primary->append = stepcompress_append_mirror;
+        primary->commit = stepcompress_commit_mirror;
+    } else {
+        primary->append = stepcompress_append;
+        primary->commit = stepcompress_commit;
+    }
+}
+
 // Flush pending steps
 int
 stepcompress_flush(struct stepcompress *sc, uint64_t move_clock)
@@ -626,6 +673,20 @@ stepcompress_find_past_position(struct stepcompress *sc, uint64_t clock)
         return hs->start_position + offset;
     }
     return last_position;
+}
+
+// Report the active append/commit dispatch targets (fetched once per
+// move-range by itersolve, then used branch-free in the hot step loop)
+stepcompress_append_fn
+stepcompress_get_append_fn(struct stepcompress *sc)
+{
+    return sc->append;
+}
+
+stepcompress_commit_fn
+stepcompress_get_commit_fn(struct stepcompress *sc)
+{
+    return sc->commit;
 }
 
 // Return history of queue_step commands

@@ -86,6 +86,19 @@ class PrinterMotionQueuing:
         se = ffi_lib.steppersync_alloc_syncemitter(ss, name, alloc_stepcompress)
         self.syncemitters.append(se)
         return se
+    def pair_twin_syncemitters(self, primary_stepper, twin_stepper):
+        # Statically pair two belt-coupled steppers so the belt is solved
+        # once.  Returns True if the C layer accepted the pairing.
+        ffi_main, ffi_lib = chelper.get_ffi()
+        ret = ffi_lib.syncemitter_set_twin_pair(
+            primary_stepper.get_syncemitter(),
+            twin_stepper.get_syncemitter())
+        if ret:
+            logging.warning(
+                "Twin-stepper dedup unavailable for %s / %s",
+                primary_stepper.get_name(), twin_stepper.get_name())
+            return False
+        return True
     def setup_mcu_movequeue(self, mcu, serialqueue, move_count):
         # Setup steppersync object for the mcu's main movequeue
         ffi_main, ffi_lib = chelper.get_ffi()

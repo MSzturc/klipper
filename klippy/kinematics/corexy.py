@@ -3,7 +3,7 @@
 # Copyright (C) 2017-2021  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, math
+import logging, math, os
 import stepper
 
 class CoreXYKinematics:
@@ -20,6 +20,24 @@ class CoreXYKinematics:
         self.rails[2].setup_itersolve('cartesian_stepper_alloc', b'z')
         for s in self.get_steppers():
             s.set_trapq(toolhead.get_trapq())
+        # Pair belt-coupled twin steppers (AWD): both motors on a CoreXY belt
+        # are rigidly coupled and produce identical step streams, so each
+        # belt is solved once and mirrored onto the twin.  Only the X and Y
+        # belts qualify; the Z rail is left untouched.  A rail is a twin pair
+        # only if it carries exactly two steppers, shares a single endstop,
+        # and both steppers live on the same MCU.  IDEX/dual_carriage setups
+        # are excluded.  KLIPPER_DISABLE_TWIN_DEDUP is a test hook that forces
+        # the independent-solve path for byte-identity verification.
+        if (not config.has_section('dual_carriage')
+                and not os.environ.get('KLIPPER_DISABLE_TWIN_DEDUP')):
+            printer = config.get_printer()
+            motion_queuing = printer.load_object(config, 'motion_queuing')
+            for rail in self.rails[:2]:
+                steppers = rail.get_steppers()
+                if (len(steppers) == 2 and len(rail.get_endstops()) == 1
+                        and steppers[0].get_mcu() is steppers[1].get_mcu()):
+                    motion_queuing.pair_twin_syncemitters(steppers[0],
+                                                          steppers[1])
         # Setup boundary checks
         max_velocity, max_accel = toolhead.get_max_velocity()
         self.max_z_velocity = config.getfloat(

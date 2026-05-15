@@ -82,20 +82,35 @@ class ForceMove:
     def manual_move(self, stepper, dist, speed, accel=0.):
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.flush_step_generation()
-        prev_sk = stepper.set_stepper_kinematics(self.stepper_kinematics)
-        prev_trapq = stepper.set_trapq(self.trapq)
-        stepper.set_position((0., 0., 0.))
-        axis_r, accel_t, cruise_t, cruise_v = calc_move_time(dist, speed, accel)
-        print_time = toolhead.get_last_move_time()
-        self.trapq_append(self.trapq, print_time, accel_t, cruise_t, accel_t,
-                          0., 0., 0., axis_r, 0., 0., 0., cruise_v, accel)
-        print_time = print_time + accel_t + cruise_t + accel_t
-        self.motion_queuing.note_mcu_movequeue_activity(print_time)
-        toolhead.dwell(accel_t + cruise_t + accel_t)
-        toolhead.flush_step_generation()
-        stepper.set_trapq(prev_trapq)
-        stepper.set_stepper_kinematics(prev_sk)
-        self.motion_queuing.wipe_trapq(self.trapq)
+        # A single-stepper move must drive exactly the addressed stepper, so
+        # detach any twin-dedup relationship for the duration of the move.
+        # No-op for steppers that are not part of a twin pair.  A pair left
+        # suspended would stop mirroring steps onto the primary and silently
+        # corrupt every later print, so the resume is guarded unconditionally.
+        ffi_main, ffi_lib = chelper.get_ffi()
+        syncemitter = stepper.get_syncemitter()
+        try:
+            ffi_lib.syncemitter_suspend_twin(syncemitter)
+            prev_sk = stepper.set_stepper_kinematics(self.stepper_kinematics)
+            prev_trapq = stepper.set_trapq(self.trapq)
+            try:
+                stepper.set_position((0., 0., 0.))
+                axis_r, accel_t, cruise_t, cruise_v = calc_move_time(
+                    dist, speed, accel)
+                print_time = toolhead.get_last_move_time()
+                self.trapq_append(self.trapq, print_time, accel_t, cruise_t,
+                                  accel_t, 0., 0., 0., axis_r, 0., 0., 0.,
+                                  cruise_v, accel)
+                print_time = print_time + accel_t + cruise_t + accel_t
+                self.motion_queuing.note_mcu_movequeue_activity(print_time)
+                toolhead.dwell(accel_t + cruise_t + accel_t)
+                toolhead.flush_step_generation()
+            finally:
+                stepper.set_trapq(prev_trapq)
+                stepper.set_stepper_kinematics(prev_sk)
+                self.motion_queuing.wipe_trapq(self.trapq)
+        finally:
+            ffi_lib.syncemitter_resume_twin(syncemitter)
     cmd_STEPPER_BUZZ_help = "Oscillate a given stepper to help id it"
     def cmd_STEPPER_BUZZ(self, gcmd):
         stepper = self.lookup_stepper(gcmd.get('STEPPER'))

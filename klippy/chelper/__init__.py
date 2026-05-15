@@ -64,6 +64,10 @@ defs_steppersync = """
         struct syncemitter *se);
     void syncemitter_queue_msg(struct syncemitter *se, uint64_t req_clock
         , uint32_t *data, int len);
+    int syncemitter_set_twin_pair(struct syncemitter *primary
+        , struct syncemitter *twin);
+    void syncemitter_suspend_twin(struct syncemitter *se);
+    void syncemitter_resume_twin(struct syncemitter *se);
 
     struct syncemitter *steppersync_alloc_syncemitter(struct steppersync *ss
         , char name[16], int alloc_stepcompress);

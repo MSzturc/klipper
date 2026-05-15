@@ -30,6 +30,8 @@ gen_steps_range_secant(struct stepper_kinematics *sk, struct stepcompress *sc
                        , struct move *m, double abs_start, double abs_end)
 {
     sk_calc_callback calc_position_cb = sk->calc_position_cb;
+    stepcompress_append_fn sc_append = stepcompress_get_append_fn(sc);
+    stepcompress_commit_fn sc_commit = stepcompress_get_commit_fn(sc);
     double half_step = .5 * sk->step_dist;
     double start = abs_start - m->print_time, end = abs_end - m->print_time;
     if (start < 0.)
@@ -99,13 +101,13 @@ gen_steps_range_secant(struct stepper_kinematics *sk, struct stepcompress *sc
             if (!have_bracket || high_time - low_time > .000000001) {
                 if (!is_dir_change && rel_dist >= -half_step)
                     // Avoid rollback if stepper fully reaches step position
-                    stepcompress_commit(sc);
+                    sc_commit(sc);
                 // Guess is not close enough - guess again with new time
                 continue;
             }
         }
         // Found next step - submit it
-        int ret = stepcompress_append(sc, sdir, m->print_time, guess.time);
+        int ret = sc_append(sc, sdir, m->print_time, guess.time);
         if (ret)
             return ret;
         target = sdir ? target+half_step+half_step : target-half_step-half_step;
@@ -138,6 +140,7 @@ itersolve_gen_steps_range_cruise(struct stepper_kinematics *sk
                                  , double abs_start, double abs_end)
 {
     sk_calc_callback calc_position_cb = sk->calc_position_cb;
+    stepcompress_append_fn sc_append = stepcompress_get_append_fn(sc);
     double half_step = .5 * sk->step_dist;
     double start = abs_start - m->print_time, end = abs_end - m->print_time;
     if (start < 0.)
@@ -179,7 +182,7 @@ itersolve_gen_steps_range_cruise(struct stepper_kinematics *sk
             break;
         if (unlikely(t_step < start))
             t_step = start;
-        int ret = stepcompress_append(sc, sdir, m->print_time, t_step);
+        int ret = sc_append(sc, sdir, m->print_time, t_step);
         if (ret)
             return ret;
         target += step_delta;

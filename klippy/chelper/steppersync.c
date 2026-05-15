@@ -29,6 +29,22 @@
  * SyncEmitter - message generation for each stepper
  ****************************************************************/
 
+// Twin-stepper deduplication modes.  A SOLO emitter behaves exactly as
+// before.  A PRIMARY runs itersolve and mirrors into the twin's queue; a
+// TWIN skips itersolve and only flushes its mirrored queue.
+enum { SE_MODE_SOLO = 0, SE_MODE_PRIMARY, SE_MODE_TWIN };
+
+// Per-pair handoff: the twin thread blocks until the primary thread has
+// finished mirroring its solved steps.  Separate from the syncemitter
+// lock/cond (which only carries the orchestrator <-> thread have_work
+// signalling).
+struct twin_handoff {
+    pthread_mutex_t lock;
+    pthread_cond_t cond;
+    int primary_done;
+    int32_t primary_result;
+};
+
 struct syncemitter {
     // List node for storage in steppersync list
     struct list_node ss_node;
@@ -45,6 +61,11 @@ struct syncemitter {
     double bg_gen_steps_time;
     uint64_t bg_flush_clock, bg_clear_history_clock;
     int32_t bg_result;
+    // Twin-stepper deduplication
+    int mode;
+    struct syncemitter *pair_partner;  // the other half of the pair
+    int pair_is_primary;               // stable role flag (survives suspend)
+    struct twin_handoff *handoff;      // shared by the pair (owned by primary)
 };
 
 // Return this emitters 'struct stepcompress' (or NULL if not allocated)
@@ -79,24 +100,150 @@ syncemitter_queue_msg(struct syncemitter *se, uint64_t req_clock
     list_add_tail(&qm->node, &se->msg_queue);
 }
 
+// Statically pair two belt-coupled steppers for deduplication.  Returns 0
+// on success, -1 if the two kinematics are not provably identical (in which
+// case both steppers keep solving independently -- behaviour as before).
+int __visible
+syncemitter_set_twin_pair(struct syncemitter *primary, struct syncemitter *twin)
+{
+    struct stepper_kinematics *p = primary->sk, *t = twin->sk;
+    if (!primary->sc || !twin->sc || !p || !t)
+        return -1;
+    if (p->calc_position_cb != t->calc_position_cb
+        || p->step_dist != t->step_dist
+        || p->commanded_pos != t->commanded_pos
+        || p->tq != t->tq
+        || p->is_linear != t->is_linear
+        || p->active_flags != t->active_flags
+        || p->post_cb != NULL || t->post_cb != NULL)
+        return -1;
+
+    struct twin_handoff *h = malloc(sizeof(*h));
+    memset(h, 0, sizeof(*h));
+    if (pthread_mutex_init(&h->lock, NULL)
+        || pthread_cond_init(&h->cond, NULL)) {
+        free(h);
+        return -1;
+    }
+    primary->mode = SE_MODE_PRIMARY;
+    twin->mode = SE_MODE_TWIN;
+    primary->pair_partner = twin;
+    twin->pair_partner = primary;
+    primary->pair_is_primary = 1;
+    twin->pair_is_primary = 0;
+    primary->handoff = twin->handoff = h;
+    stepcompress_set_twin(primary->sc, twin->sc);
+    return 0;
+}
+
+// Resolve either half of a pair to its primary (or NULL if unpaired).
+static struct syncemitter *
+twin_pair_primary(struct syncemitter *se)
+{
+    if (!se->pair_partner)
+        return NULL;
+    return se->pair_is_primary ? se : se->pair_partner;
+}
+
+// Temporarily detach a twin pair so both steppers solve independently.
+// Cold path -- used by force_move around single-stepper diagnostic moves,
+// always while step generation is idle.
+void __visible
+syncemitter_suspend_twin(struct syncemitter *se)
+{
+    struct syncemitter *p = twin_pair_primary(se);
+    if (!p)
+        return;
+    stepcompress_set_twin(p->sc, NULL);
+    p->mode = SE_MODE_SOLO;
+    p->pair_partner->mode = SE_MODE_SOLO;
+}
+
+// Re-attach a twin pair suspended by syncemitter_suspend_twin.
+void __visible
+syncemitter_resume_twin(struct syncemitter *se)
+{
+    struct syncemitter *p = twin_pair_primary(se);
+    if (!p)
+        return;
+    stepcompress_set_twin(p->sc, p->pair_partner->sc);
+    p->mode = SE_MODE_PRIMARY;
+    p->pair_partner->mode = SE_MODE_TWIN;
+}
+
+// Carry the primary's solved per-sk state onto the twin's sk.  itersolve
+// never runs on the twin, so commanded_pos / last_flush_time /
+// last_move_time would otherwise freeze (consumed by itersolve_check_active
+// and position reporting).  Cold path -- runs once per gen cycle.
+static void
+twin_copy_sk_state(struct stepper_kinematics *dst
+                   , struct stepper_kinematics *src)
+{
+    dst->commanded_pos = src->commanded_pos;
+    dst->last_flush_time = src->last_flush_time;
+    dst->last_move_time = src->last_move_time;
+}
+
+// Publish the primary's step-generation result to the waiting twin.  Always
+// called by the primary -- even on error or early-out -- so the twin can
+// never block forever.
+static void
+twin_handoff_signal(struct twin_handoff *h, int32_t result)
+{
+    pthread_mutex_lock(&h->lock);
+    h->primary_result = result;
+    h->primary_done = 1;
+    pthread_cond_signal(&h->cond);
+    pthread_mutex_unlock(&h->lock);
+}
+
 // Generate steps (via itersolve) and flush
 __attribute__((hot)) static int32_t
 se_generate_steps(struct syncemitter *se)
 {
-    if (!se->sc || !se->sk)
+    if (!se->sc || !se->sk) {
+        if (se->mode == SE_MODE_PRIMARY)
+            twin_handoff_signal(se->handoff, 0);
         return 0;
+    }
     double gen_steps_time = se->bg_gen_steps_time;
     uint64_t flush_clock = se->bg_flush_clock;
     uint64_t clear_history_clock = se->bg_clear_history_clock;
-    // Generate steps
+
+    if (se->mode == SE_MODE_TWIN) {
+        // Wait until the primary has mirrored all steps into our queue.
+        struct twin_handoff *h = se->handoff;
+        pthread_mutex_lock(&h->lock);
+        while (!h->primary_done)
+            pthread_cond_wait(&h->cond, &h->lock);
+        int32_t primary_result = h->primary_result;
+        pthread_mutex_unlock(&h->lock);
+        if (primary_result)
+            return primary_result;
+        // Flush our own (mirrored) queue and carry over the primary sk state.
+        int32_t ret = stepcompress_flush(se->sc, flush_clock);
+        if (ret)
+            return ret;
+        stepcompress_history_expire(se->sc, clear_history_clock);
+        // The primary normally always has an sk; guard against the
+        // degenerate case where it took the !se->sk early-out so the twin
+        // never dereferences a NULL primary sk.
+        if (se->pair_partner->sk)
+            twin_copy_sk_state(se->sk, se->pair_partner->sk);
+        return 0;
+    }
+
+    // SOLO and PRIMARY: solve this stepper.
     int32_t ret = itersolve_generate_steps(se->sk, se->sc, gen_steps_time);
+    if (se->mode == SE_MODE_PRIMARY)
+        // Hand off to the twin before our own flush, so both flushes run
+        // in parallel on the two pinned cores.
+        twin_handoff_signal(se->handoff, ret);
     if (ret)
         return ret;
-    // Flush steps
     ret = stepcompress_flush(se->sc, flush_clock);
     if (ret)
         return ret;
-    // Clear history
     stepcompress_history_expire(se->sc, clear_history_clock);
     return 0;
 }
@@ -135,7 +282,10 @@ static void
 se_start_gen_steps(struct syncemitter *se, double gen_steps_time
                    , uint64_t flush_clock, uint64_t clear_history_clock)
 {
-    if (!se->sc || !se->sk)
+    // Paired emitters always run their thread: the primary must signal the
+    // twin even when its own sk is NULL, and the twin must always wait for
+    // the primary handoff.  Solo emitters skip if there is nothing to do.
+    if (!se->sc || (!se->sk && se->mode == SE_MODE_SOLO))
         return;
     pthread_mutex_lock(&se->lock);
     while (se->have_work)
@@ -152,7 +302,8 @@ se_start_gen_steps(struct syncemitter *se, double gen_steps_time
 static int32_t
 se_finalize_gen_steps(struct syncemitter *se)
 {
-    if (!se->sc || !se->sk)
+    // Mirror the start-guard: only skip finalize for SOLO emitters with no sk.
+    if (!se->sc || (!se->sk && se->mode == SE_MODE_SOLO))
         return 0;
     pthread_mutex_lock(&se->lock);
     while (se->have_work)
@@ -208,6 +359,11 @@ syncemitter_free(struct syncemitter *se)
         stepcompress_free(se->sc);
     }
     message_queue_free(&se->msg_queue);
+    if (se->handoff && se->pair_is_primary) {
+        pthread_mutex_destroy(&se->handoff->lock);
+        pthread_cond_destroy(&se->handoff->cond);
+        free(se->handoff);
+    }
     free(se);
 }
 
@@ -457,6 +613,17 @@ steppersyncmgr_gen_steps(struct steppersyncmgr *ssm, double flush_time
             struct trapq *tq = itersolve_get_trapq(se->sk);
             if (tq)
                 trapq_check_sentinels(tq);
+        }
+    }
+    // Reset per-pair handoff state before any thread is kicked
+    list_for_each_entry(ss, &ssm->ss_list, ssm_node) {
+        struct syncemitter *se;
+        list_for_each_entry(se, &ss->se_list, ss_node) {
+            if (se->mode == SE_MODE_PRIMARY && se->handoff) {
+                pthread_mutex_lock(&se->handoff->lock);
+                se->handoff->primary_done = 0;
+                pthread_mutex_unlock(&se->handoff->lock);
+            }
         }
     }
     // Start step generation threads

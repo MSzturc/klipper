@@ -24,6 +24,13 @@ uint32_t stepcompress_get_oid(struct stepcompress *sc);
 int stepcompress_get_step_dir(struct stepcompress *sc);
 void stepcompress_set_time(struct stepcompress *sc
                            , double time_offset, double mcu_freq);
+typedef int (*stepcompress_append_fn)(struct stepcompress *sc, int sdir
+                                      , double print_time, double step_time);
+typedef int (*stepcompress_commit_fn)(struct stepcompress *sc);
+stepcompress_append_fn stepcompress_get_append_fn(struct stepcompress *sc);
+stepcompress_commit_fn stepcompress_get_commit_fn(struct stepcompress *sc);
+void stepcompress_set_twin(struct stepcompress *primary
+                           , struct stepcompress *twin);
 int stepcompress_append(struct stepcompress *sc, int sdir
                         , double print_time, double step_time);
 int stepcompress_commit(struct stepcompress *sc);

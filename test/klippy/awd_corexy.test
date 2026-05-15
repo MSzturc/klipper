@@ -1,0 +1,28 @@
+# Test case for AWD corexy twin-stepper deduplication
+CONFIG awd_corexy.cfg
+DICTIONARY atmega2560.dict
+
+# Home all axes
+G28
+
+# Input shaper active (X and Y belts get identical shaping)
+SET_INPUT_SHAPER SHAPER_FREQ_X=40 SHAPER_TYPE_X=mzv
+SET_INPUT_SHAPER SHAPER_FREQ_Y=38 SHAPER_TYPE_Y=ei
+
+# Moves with frequent direction changes (exercises SDS rollback on the twins)
+G1 X100 Y100 F12000
+G1 X20 Y180 F12000
+G1 X180 Y20 F12000
+G1 X100 Y100 F9000
+G1 X101 Y99 F600
+G1 X99 Y101 F600
+
+# A pure-X and a pure-Y move
+G1 X10 F6000
+G1 Y10 F6000
+
+# Single-stepper diagnostics on twin-paired steppers
+FORCE_MOVE STEPPER=stepper_x DISTANCE=5 VELOCITY=10
+FORCE_MOVE STEPPER=stepper_x1 DISTANCE=5 VELOCITY=10
+FORCE_MOVE STEPPER=stepper_y1 DISTANCE=-5 VELOCITY=10
+STEPPER_BUZZ STEPPER=stepper_x1

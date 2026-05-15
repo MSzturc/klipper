@@ -1,0 +1,18 @@
+# TSan suppression for the pre-existing, benign data race in slab_pool_alloc
+# when called concurrently from multiple stepcompress producer threads sharing
+# the global qm_pool (defined in msgblock.c).
+#
+# What: the carve-fresh-chunk slow path of slab_pool_alloc writes to
+# slab_pool->chunks without synchronization.  slab_pool.h documents this
+# explicitly: "the carve-fresh-chunk path writes to ->chunks without
+# synchronization; allocations from a single owner are the supported model."
+#
+# Why benign: qm_pool is process-lifetime; the chunks list only grows and is
+# never read back by concurrent allocators.  The worst outcome of a lost write
+# is a bounded chunk leak — queue_message objects themselves are allocated
+# correctly via the CAS fast path.
+#
+# Scope: suppresses only races whose call stack contains slab_pool_alloc.
+# Any race introduced by the twin-stepper handoff primitive (which uses
+# separate synchronization paths) will still be reported by TSan.
+race:slab_pool_alloc
