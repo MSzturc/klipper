@@ -359,6 +359,9 @@ class GCodeDispatch:
             self.printer.send_event("gcode:request_restart", print_time)
             toolhead.dwell(0.500)
             toolhead.wait_moves()
+            # Force any remaining step generation into the serial queue so a
+            # batch-mode debugoutput dump captures the full commanded motion.
+            toolhead.flush_step_generation()
         self.printer.request_exit(result)
     cmd_RESTART_help = "Reload config file and restart host software"
     def cmd_RESTART(self, gcmd):

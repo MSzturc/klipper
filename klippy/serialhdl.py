@@ -32,6 +32,8 @@ class SerialReader:
         # Threading
         self.lock = threading.Lock()
         self.background_thread = None
+        # File output drain (batch debugoutput mode only)
+        self._is_fileoutput = False
         # Message handlers
         self.handlers = {}
         self.register_response(self._handle_unknown_init, '#unknown')
@@ -222,6 +224,7 @@ class SerialReader:
         return True
     def connect_file(self, debugoutput, dictionary, pace=False):
         self.serial_dev = debugoutput
+        self._is_fileoutput = True
         self.msgparser.process_identify(dictionary, decompress=False)
         self.serialqueue = self.ffi_main.gc(
             self.ffi_lib.serialqueue_alloc(self.serial_dev.fileno(), b'f', 0,
@@ -230,8 +233,35 @@ class SerialReader:
     def set_clock_est(self, freq, conv_time, conv_clock, last_clock):
         self.ffi_lib.serialqueue_set_clock_est(
             self.serialqueue, freq, conv_time, conv_clock, last_clock)
+    def _drain_fileoutput(self):
+        # In batch debugoutput mode the serial dump is produced by the
+        # background writer thread. Wait for every queued message to reach
+        # the file before serialqueue_exit() tears the thread down, otherwise
+        # the dump is truncated on a slow host. A get_stats() call blocks on
+        # the same lock the writer holds while flushing, so seeing both byte
+        # counters at zero means no message is queued and no write is in
+        # progress. The timeout is a safety bound; a complete batch run drains
+        # near-instantly.
+        deadline = self.reactor.monotonic() + 30.
+        while 1:
+            stats = self.stats(self.reactor.monotonic())
+            pending = 0
+            for field in stats.split():
+                if field.startswith('ready_bytes='):
+                    pending += int(field[len('ready_bytes='):])
+                elif field.startswith('upcoming_bytes='):
+                    pending += int(field[len('upcoming_bytes='):])
+            if not pending:
+                break
+            if self.reactor.monotonic() > deadline:
+                logging.warning("%sTimeout draining file output queue",
+                                 self.warn_prefix)
+                break
+            self.reactor.pause(self.reactor.monotonic() + 0.010)
     def disconnect(self):
         if self.serialqueue is not None:
+            if self._is_fileoutput:
+                self._drain_fileoutput()
             self.ffi_lib.serialqueue_exit(self.serialqueue)
             if self.background_thread is not None:
                 self.background_thread.join()
