@@ -9,7 +9,12 @@
 #include "integrate.h"
 #include "trapq.h" // struct move
 
+#include <math.h>
 #include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 /****************************************************************
  * Generic smoother integration
@@ -103,4 +108,51 @@ init_smoother(int n, const double a[], double t_sm, struct smoother* sm)
     sm->pm_diff = diff_antiderivatives(&sm->m_hst, &sm->p_hst);
     sm->t_offs = sm->pm_diff.it1;
     return 0;
+}
+
+/****************************************************************
+ * Barycentric interpolation on Chebyshev nodes
+ ****************************************************************/
+
+// Chebyshev nodes of the second kind, mapped onto [a, b]:
+//   x_k = (a+b)/2 + (b-a)/2 * cos(k*pi/(npts-1)),  k = 0..npts-1
+// Requires npts >= 2; for npts < 2 the denominator (npts-1) is zero or negative,
+// making the node spacing undefined. All callers guarantee npts >= 8.
+void
+bary_nodes(double a, double b, int npts, double x[])
+{
+    double mid = 0.5 * (a + b), half = 0.5 * (b - a);
+    int last = npts - 1;
+    for (int k = 0; k <= last; ++k)
+        x[k] = mid + half * cos((double)k * M_PI / (double)last);
+}
+
+// Barycentric weights for Chebyshev-2nd-kind nodes are known in closed form:
+//   w_k = (-1)^k, halved at the two endpoints. A common positive factor
+//   cancels in bary_eval, so sign and endpoint halving are all that matter.
+void
+bary_weights(int npts, double w[])
+{
+    int last = npts - 1;
+    for (int k = 0; k <= last; ++k) {
+        double s = (k & 1) ? -1.0 : 1.0;
+        w[k] = (k == 0 || k == last) ? 0.5 * s : s;
+    }
+}
+
+// Evaluate the barycentric interpolant through (x[k], f[k]) at xq.
+double
+bary_eval(int npts, const double x[], const double w[]
+          , const double f[], double xq)
+{
+    double num = 0., den = 0.;
+    for (int k = 0; k < npts; ++k) {
+        double d = xq - x[k];
+        if (d == 0.)
+            return f[k];                 // xq hits a node exactly
+        double q = w[k] / d;
+        num += q * f[k];
+        den += q;
+    }
+    return num / den;
 }

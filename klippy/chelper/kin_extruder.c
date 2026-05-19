@@ -34,6 +34,25 @@ struct pressure_advance_params {
     struct list_node node;
 };
 
+// Smoother order n is at most 12, the cached position integral has degree
+// n+2, so the barycentric interpolant uses npts = n+3 <= 15 nodes. The
+// buffers are sized one slot beyond that.
+#define EPOCH_CACHE_NPTS_MAX 16
+
+struct epoch_cache {
+    int valid;
+    int npts;
+    double epoch_lo, epoch_hi;
+    double tau0;     // absolute time origin; nodes[] are stored relative to tau0
+    // fpos0/fvel0 are the reference offsets subtracted from fpos[]/fvel[]
+    // before the barycentric sum.  Mirroring the time-axis centering (tau0)
+    // onto the value axis prevents catastrophic cancellation when absolute
+    // integral values are large (e.g. extruder position after a long print).
+    double fpos0, fvel0;
+    double nodes[EPOCH_CACHE_NPTS_MAX], wbary[EPOCH_CACHE_NPTS_MAX];
+    double fpos[EPOCH_CACHE_NPTS_MAX], fvel[EPOCH_CACHE_NPTS_MAX];
+};
+
 static const double pa_smoother_coeffs[] = {15./8., 0., -15., 0., 30.};
 
 // Without pressure advance, the extruder stepper position is:
@@ -73,11 +92,46 @@ pa_move_integrate(const struct move *m, int axis, double base
     }
 }
 
-// Calculate the definitive integral of the extruder over a range of moves
+// Compute the open epoch interval (lo, hi) over which both the first move f
+// and the last move l fully cover the smoother half-window hst.  Caller
+// discards the epoch when lo >= hi (degenerate or sub-window gap).
 static void
-pa_range_integrate(const struct move *m, int axis, double move_time
-                   , const struct smoother *sm
-                   , double *pos_integral, double *pa_velocity_integral)
+epoch_bounds(const struct move *f, const struct move *l, double hst
+             , double *lo, double *hi)
+{
+    double f_lo = f->print_time + hst;
+    double f_hi = f->print_time + f->move_t + hst;
+    double l_lo = l->print_time - hst;
+    double l_hi = l->print_time + l->move_t - hst;
+    *lo = f_lo > l_lo ? f_lo : l_lo;
+    *hi = f_hi < l_hi ? f_hi : l_hi;
+}
+
+// Returns true iff tau lies strictly inside the cached epoch interval.
+// The interval is open on both ends: boundary hits are treated as misses
+// so that the caller always recomputes at the exact transition point.
+static inline int
+epoch_hit(const struct epoch_cache *c, double tau)
+{
+    return c->valid && c->epoch_lo < tau && tau < c->epoch_hi;
+}
+
+// trapq sentinels (NEVER_TIME is defined in trapq.c, not exported in trapq.h):
+//   head: print_time = -1.0;  tail: print_time = move_t = NEVER_TIME (~1e16).
+// The 1e15 threshold sits well below NEVER_TIME to catch the tail robustly.
+static inline int
+is_sentinel_move(const struct move *m)
+{
+    return m->print_time < 0. || m->move_t > 1e15;
+}
+
+// Walk over the moves in the smoothing window and accumulate integrals.
+// Optionally reports the first (earliest) and last (latest) move touched.
+static void
+pa_range_walk(const struct move *m, int axis, double move_time
+              , const struct smoother *sm
+              , double *pos_integral, double *pa_velocity_integral
+              , const struct move **first_out, const struct move **last_out)
 {
     move_time += sm->t_offs;
     while (unlikely(move_time < 0.)) {
@@ -97,6 +151,8 @@ pa_range_integrate(const struct move *m, int axis, double move_time
         pa_move_integrate(m, axis, 0., t0, &sm->pm_diff,
                           pos_integral, pa_velocity_integral);
         *pos_integral += start_base;
+        if (first_out) *first_out = m;
+        if (last_out) *last_out = m;
         return;
     }
     smoother_antiderivatives left =
@@ -137,6 +193,8 @@ pa_range_integrate(const struct move *m, int axis, double move_time
                           pos_integral, pa_velocity_integral);
     }
     *pos_integral += start_base;
+    if (first_out) *first_out = prev;
+    if (last_out) *last_out = m;
 }
 
 struct extruder_stepper {
@@ -145,7 +203,107 @@ struct extruder_stepper {
     int smooth_extruding_moves, smooth_extrude_only_moves;
     struct list_head pa_list;
     double time_offset;
+    struct epoch_cache cache[3];
+    double cache_last_flush_time; // last seen last_flush_time; invalidates cache on batch change
+    int cache_bypass;             // per-call flag: bypass cache entirely (e.g. for synthetic moves)
+    int epoch_cache_enabled;
 };
+
+// An epoch must be revisited often enough to amortize its n+3 sample walks.
+// Real epochs span ~0.6 ms (hundreds of solver evaluations); only degenerate
+// epochs a few evaluation-spacings wide are skipped. Tunable heuristic --
+// must stay far below the real epoch length, never near it.
+#define SHORT_EPOCH_MIN 5e-5
+
+#ifdef UNIT_TEST
+long diag_epoch_hits, diag_epoch_builds;   // exercised-path counters for tests
+#endif
+
+void __visible
+extruder_set_epoch_cache_enabled(struct stepper_kinematics *sk, int enabled)
+{
+    struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
+    es->epoch_cache_enabled = enabled;
+}
+
+// Cache-wrapper around pa_range_walk. On a cache hit the position and velocity
+// integrals are returned via barycentric interpolation of the stored epoch
+// polynomial; on a miss the direct walk result is returned and, when conditions
+// are met, a fresh cache entry is built from n+3 Chebyshev sample walks.
+static void
+pa_range_integrate(struct extruder_stepper *es, const struct move *m, int axis
+                   , double move_time
+                   , double *pos_integral, double *pa_velocity_integral)
+{
+    int ax = axis - 'x';
+    const struct smoother *sm = &es->sm[ax];
+    struct epoch_cache *c = &es->cache[ax];
+    int use_cache = es->epoch_cache_enabled && !es->cache_bypass;
+
+    // Absolute window-center time. Invariant under the walk's move_time
+    // renormalization, so no list traversal is needed to compute it.
+    double tau = m->print_time + move_time + sm->t_offs;
+
+    if (use_cache && epoch_hit(c, tau)) {
+        double d = tau - c->tau0;
+        *pos_integral = c->fpos0 + bary_eval(c->npts, c->nodes, c->wbary, c->fpos, d);
+        *pa_velocity_integral = c->fvel0 + bary_eval(c->npts, c->nodes, c->wbary, c->fvel, d);
+#ifdef UNIT_TEST
+        diag_epoch_hits++;
+#endif
+        return;
+    }
+
+    // Miss: the direct walk at tau is the returned value (ground truth).
+    const struct move *f, *l;
+    pa_range_walk(m, axis, move_time, sm, pos_integral, pa_velocity_integral,
+                  &f, &l);
+    if (!use_cache)
+        return;
+
+    // Build the epoch cache for future calls -- only strictly inside a
+    // non-sentinel, long-enough epoch.
+    if (is_sentinel_move(f) || is_sentinel_move(l)) {
+        c->valid = 0;
+        return;
+    }
+    double lo, hi;
+    epoch_bounds(f, l, sm->hst, &lo, &hi);
+    if (!(lo < tau && tau < hi) || hi - lo < SHORT_EPOCH_MIN) {
+        c->valid = 0;
+        return;
+    }
+    int npts = sm->n + 3;                          // pos degree n+2 -> n+3 nodes
+    double tau0 = 0.5 * (lo + hi);
+    double abs_nodes[EPOCH_CACHE_NPTS_MAX];
+    bary_nodes(lo, hi, npts, abs_nodes);
+    bary_weights(npts, c->wbary);
+    for (int k = 0; k < npts; ++k) {
+        double move_time_k = abs_nodes[k] - sm->t_offs - m->print_time;
+        pa_range_walk(m, axis, move_time_k, sm, &c->fpos[k], &c->fvel[k],
+                      NULL, NULL);
+        c->nodes[k] = abs_nodes[k] - tau0;         // store shifted (local origin)
+    }
+    // Center the sampled values around the middle node so that bary_eval sums
+    // small residuals rather than large absolute integrals.  This mirrors the
+    // time-axis centering (tau0) onto the value axis and avoids catastrophic
+    // cancellation in the alternating-sign barycentric sum when the extruder
+    // has accumulated a large absolute position over a long print.
+    c->fpos0 = c->fpos[npts / 2];
+    c->fvel0 = c->fvel[npts / 2];
+    for (int k = 0; k < npts; ++k) {
+        c->fpos[k] -= c->fpos0;
+        c->fvel[k] -= c->fvel0;
+    }
+    c->npts = npts;
+    c->epoch_lo = lo;
+    c->epoch_hi = hi;
+    c->tau0 = tau0;
+    c->valid = 1;
+#ifdef UNIT_TEST
+    diag_epoch_builds++;
+#endif
+}
 
 double __visible
 pressure_advance_linear_model_func(double position, double pa_velocity
@@ -251,6 +409,15 @@ extruder_calc_position(struct stepper_kinematics *sk, struct move *m
                        , double move_time)
 {
     struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
+    // Synthetic moves (e.g. homing) are memset-zeroed and never linked into
+    // a trapq, so node.next == NULL. They carry no valid epoch context and
+    // must bypass the cache entirely -- never stored, never matched as a hit.
+    es->cache_bypass = is_sentinel_move(m) || m->node.next == NULL;
+    if (sk->last_flush_time != es->cache_last_flush_time) {
+        for (int j = 0; j < 3; ++j)
+            es->cache[j].valid = 0;
+        es->cache_last_flush_time = sk->last_flush_time;
+    }
     move_time += es->time_offset;
     while (unlikely(move_time < 0.)) {
         m = list_prev_entry(m, node);
@@ -269,7 +436,7 @@ extruder_calc_position(struct stepper_kinematics *sk, struct move *m
         if (!sm->hst) {
             pa_vel.axis[i] = 0.;
         } else {
-            pa_range_integrate(m, axis, move_time, sm,
+            pa_range_integrate(es, m, axis, move_time,
                                &e_pos.axis[i], &pa_vel.axis[i]);
         }
         if (!sm->hst || !es->smooth_extruding_moves ||
@@ -328,6 +495,10 @@ extruder_set_pressure_advance(struct stepper_kinematics *sk, double print_time
         first_pa = next_pa;
     }
 
+    // No cache invalidation here: the epoch cache is keyed on absolute time
+    // tau and its polynomial depends only on the smoother and trapq moves, not
+    // on time_offset or PA parameters. A time_offset change shifts the
+    // (m, move_time) -> tau mapping, which is recomputed fresh on every call.
     es->time_offset = time_offset;
     extruder_note_generation_time(es);
 
@@ -371,6 +542,8 @@ extruder_set_smoothing_params(struct stepper_kinematics *sk, char axis
     int status = init_smoother(n, a, t_sm, sm);
     sm->t_offs = t_offs;
     extruder_note_generation_time(es);
+    for (int j = 0; j < 3; ++j)
+        es->cache[j].valid = 0;
     return status;
 }
 
@@ -387,6 +560,7 @@ extruder_stepper_alloc(void)
 {
     struct extruder_stepper *es = malloc(sizeof(*es));
     memset(es, 0, sizeof(*es));
+    es->epoch_cache_enabled = 1;
     es->sk.calc_position_cb = extruder_calc_position;
     es->sk.active_flags = AF_X | AF_Y | AF_Z;
     // With half_accel==0 move_dist == start_v*t, e_pos is affine in t, and

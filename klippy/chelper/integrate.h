@@ -26,4 +26,10 @@ smoother_antiderivatives
 diff_antiderivatives(const smoother_antiderivatives* ad1
                      , const smoother_antiderivatives* ad2);
 
+// Barycentric Lagrange interpolation on Chebyshev nodes of the second kind.
+void bary_nodes(double a, double b, int npts, double x[]);
+void bary_weights(int npts, double w[]);
+double bary_eval(int npts, const double x[], const double w[]
+                 , const double f[], double xq);
+
 #endif // integrate.h

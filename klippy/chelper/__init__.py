@@ -189,6 +189,8 @@ defs_kin_extruder = """
     void extruder_set_smooth_moves_params(struct stepper_kinematics *sk
         , int smooth_extruding_moves, int smooth_extrude_only_moves);
     double extruder_get_step_gen_window(struct stepper_kinematics *sk);
+    void extruder_set_epoch_cache_enabled(struct stepper_kinematics *sk
+                                          , int enabled);
 """
 
 defs_kin_shaper = """
