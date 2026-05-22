@@ -109,6 +109,13 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(fc.get("extruder", "heater_pin"),
                          "multi_pin:dual_heater")
 
+    def test_arc_support_rides_in_via_base_layer(self):
+        # G2/G3 arc support is printer-agnostic, so every rendered config gets
+        # it from the always-included base layer -- no per-printer wiring.
+        fc = generator.validate(generator.render(self._t250_selection()),
+                                CONFIG_ROOT)
+        self.assertTrue(fc.has_section("gcode_arcs"))
+
     def test_t250_probe_carries_required_z_offset(self):
         # BDsensor.load_config reads z_offset with no default, so the assembled
         # config must supply it. The legacy template did this via a [BDsensor]
