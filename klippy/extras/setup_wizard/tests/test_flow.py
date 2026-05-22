@@ -46,6 +46,7 @@ class FlowTest(unittest.TestCase):
         w.answer("board", "btt-kraken")     # integrated -> no free slots
         self.assertEqual(w.pending_driver_groups(), [])
         w.answer("toolhead", "dualhorn")
+        w.answer("hotend", "rapido-uhf")
         w.answer("bed", "ender-3")
         text = w.finish()                   # assembles + validates
         # render emits the printer's leaves, not the meta-def include itself
@@ -56,6 +57,7 @@ class FlowTest(unittest.TestCase):
         w.answer("printer", "t250")
         w.answer("board", "btt-kraken")
         w.answer("toolhead", "dualhorn")
+        w.answer("hotend", "rapido-uhf")
         w.gcode.out = []
         w.answer("bed", "ender-3")
         w._advance("bed")
@@ -81,19 +83,55 @@ class FlowTest(unittest.TestCase):
         w.answer("printer", "t250")
         w.answer("board", "btt-kraken")
         w.answer("toolhead", "dualhorn")
+        w.answer("hotend", "rapido-uhf")
         w.gcode.out = []
-        w._advance("toolhead")   # -> bed prompt
+        w._advance("hotend")   # -> bed prompt
         out = w.gcode.out
         self.assertIn("action:prompt_begin Printbed", out)
         btns = [ln for ln in out if ln.startswith("action:prompt_button")]
         self.assertTrue(btns)
         self.assertTrue(all(b.endswith("|primary") for b in btns), out)
 
+    def test_hotend_prompt_offered_after_toolhead(self):
+        w = self._wizard()
+        w.answer("printer", "t250")
+        w.answer("board", "btt-kraken")
+        w.answer("toolhead", "dualhorn")
+        w.gcode.out = []
+        w._advance("toolhead")   # -> hotend prompt
+        out = w.gcode.out
+        self.assertIn("action:prompt_begin Hotend", out)
+        joined = "\n".join(out)
+        self.assertIn("Rapido UHF", joined)
+        btns = [ln for ln in out if ln.startswith("action:prompt_button")]
+        self.assertTrue(all(b.endswith("|primary") for b in btns), out)
+
+    def test_hotend_prompt_offers_dual_heater_on_dual_heater_board(self):
+        w = self._wizard()
+        w.answer("printer", "t250")
+        w.answer("board", "btt-kraken")   # two heater pins
+        w.answer("toolhead", "dualhorn")
+        w.gcode.out = []
+        w._advance("toolhead")
+        self.assertIn("STD6 V2", "\n".join(w.gcode.out))
+
+    def test_hotend_prompt_hides_dual_heater_on_single_heater_board(self):
+        w = self._wizard()
+        w.answer("printer", "t100")
+        w.answer("board", "btt-skr-pico")   # one heater pin
+        w.answer("toolhead", "standard")
+        w.gcode.out = []
+        w._advance("toolhead")
+        joined = "\n".join(w.gcode.out)
+        self.assertNotIn("STD6 V2", joined)
+        self.assertIn("CHC Pro", joined)
+
     def test_accessory_selection_included(self):
         w = self._wizard()
         w.answer("printer", "t250")
         w.answer("board", "btt-kraken")
         w.answer("toolhead", "dualhorn")
+        w.answer("hotend", "rapido-uhf")
         w.answer("bed", "ender-3")
         w.answer("accessory", "fysetc-nis")
         text = w.finish()
@@ -104,6 +142,7 @@ class FlowTest(unittest.TestCase):
         w.answer("printer", "t250")
         w.answer("board", "btt-kraken")
         w.answer("toolhead", "dualhorn")
+        w.answer("hotend", "rapido-uhf")
         w.answer("bed", "ender-3")
         w.answer("accessory", "none")
         text = w.finish()

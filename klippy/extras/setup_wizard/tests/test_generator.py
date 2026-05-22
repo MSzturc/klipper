@@ -35,18 +35,19 @@ class GeneratorTest(unittest.TestCase):
         return generator.Selection(
             config_root=CONFIG_ROOT,
             printer="t250", board="btt-kraken", toolhead="dualhorn",
-            bed="ender-3", constants={"printer": "t250"})
+            hotend="rapido-uhf", bed="ender-3", constants={"printer": "t250"})
 
     def _t100_selection(self):
         return generator.Selection(
             config_root=CONFIG_ROOT,
             printer="t100", board="btt-skr-pico", toolhead="standard",
-            bed="ender-2-pro", constants={"printer": "t100"})
+            hotend="chc-pro", bed="ender-2-pro", constants={"printer": "t100"})
 
     def test_render_has_leaf_includes_seam_and_overrides(self):
         text = generator.render(self._t250_selection())
         self.assertIn("[include config/kinematics/corexy.cfg]", text)
-        self.assertIn("[include config/hotends/rapido-uhf.cfg]", text)
+        # The hotend rides in as one self-contained leaf include.
+        self.assertIn("[include config/hotends/rapido-uhf/hotend.cfg]", text)
         self.assertIn("[include config/boards/btt-kraken/config.cfg]", text)
         # the printer-agnostic base layer is always emitted
         self.assertIn("[include config/base/essentials.cfg]", text)
@@ -85,6 +86,28 @@ class GeneratorTest(unittest.TestCase):
         self.assertTrue(fc.has_section("shaketune"))
         self.assertTrue(fc.has_section("resonance_tester"))
         self.assertTrue(fc.has_section("adxl345"))
+
+    def test_hotend_emits_single_self_contained_include(self):
+        # printer.cfg references the hotend by one include; the [extruder]
+        # body and the wiring sub-module stay inside hotend.cfg, not surfaced.
+        text = generator.render(self._t250_selection())
+        self.assertIn("[include config/hotends/rapido-uhf/hotend.cfg]", text)
+        self.assertNotIn("config/hotends/default_wiring.cfg", text)
+        self.assertNotIn("config/hotends/dual_wiring.cfg", text)
+        self.assertNotIn("ATC Semitec", text)
+
+    def test_dual_heater_hotend_resolves_via_leaf_include(self):
+        # The wiring is a sub-include of hotend.cfg, so it only shows up after
+        # the leaf is resolved -- never as a top-level include in printer.cfg.
+        sel = self._t250_selection()
+        sel.hotend = "std6-v2"
+        text = generator.render(sel)
+        fc = generator.validate(text, CONFIG_ROOT)
+        self.assertIn("[include config/hotends/std6-v2/hotend.cfg]", text)
+        self.assertNotIn("config/hotends/dual_wiring.cfg", text)
+        self.assertTrue(fc.has_section("multi_pin dual_heater"))
+        self.assertEqual(fc.get("extruder", "heater_pin"),
+                         "multi_pin:dual_heater")
 
     def test_t250_probe_carries_required_z_offset(self):
         # BDsensor.load_config reads z_offset with no default, so the assembled

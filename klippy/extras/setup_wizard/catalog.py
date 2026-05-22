@@ -10,6 +10,7 @@ _META_FILE = {
     "boards": "config.cfg",
     "accessories": "accessory.cfg",
     "drivers": "driver.cfg",
+    "hotends": "hotend.cfg",
 }
 _LABEL_KEY = {
     "printers": "printer_label",
@@ -18,6 +19,7 @@ _LABEL_KEY = {
     "boards": "board_label",
     "accessories": "accessory_label",
     "drivers": "driver_label",
+    "hotends": "hotend_label",
 }
 
 
@@ -56,6 +58,17 @@ def compatible(config_root, dimension, printer_id):
         if printer_id in ids:
             out.append(o)
     return out
+
+
+def hotends_for_board(config_root, board_id):
+    """Hotends whose heater need is covered by the board's heater pins. A
+    dual-cartridge hotend (e.g. STD6 V2, {E, E1}) is hidden on a single-heater
+    board ({E}). The fit is derived, not declared (see driver_model)."""
+    from . import driver_model
+    board_cfg = os.path.join(config_root, "boards", board_id, "config.cfg")
+    offered = driver_model.board_heaters(board_cfg)
+    return [h for h in discover(config_root, "hotends")
+            if driver_model.collect_heater_aliases(h["meta"]) <= offered]
 
 
 def boards_for_printer(config_root, printer_id):

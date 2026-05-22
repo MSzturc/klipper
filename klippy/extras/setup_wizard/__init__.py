@@ -12,7 +12,7 @@ import os
 import logging
 from . import catalog, driver_model, generator, prompts
 
-EASY_STEPS = ["printer", "board", "toolhead", "bed", "accessory"]
+EASY_STEPS = ["printer", "board", "toolhead", "hotend", "bed", "accessory"]
 
 
 class SetupWizard:
@@ -65,6 +65,7 @@ class SetupWizard:
             printer=self.answers["printer"],
             board=self.answers["board"],
             toolhead=self.answers["toolhead"],
+            hotend=self.answers["hotend"],
             bed=self.answers["bed"],
             accessories=accessories,
             constants={"printer": self.answers["printer"]})
@@ -145,6 +146,13 @@ class SetupWizard:
             return prompts.dialog(
                 "Toolhead", "Select your Toolhead:",
                 [(o["label"], "WIZARD_ANSWER KEY=toolhead VALUE=%s" % o["id"],
+                  "primary") for o in opts])
+        if step == "hotend":
+            opts = catalog.hotends_for_board(self.config_root,
+                                             self.answers["board"])
+            return prompts.dialog(
+                "Hotend", "Select your Hotend:",
+                [(o["label"], "WIZARD_ANSWER KEY=hotend VALUE=%s" % o["id"],
                   "primary") for o in opts])
         if step == "bed":
             opts = catalog.compatible(self.config_root, "beds",

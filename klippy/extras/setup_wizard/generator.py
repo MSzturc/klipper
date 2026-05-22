@@ -9,12 +9,13 @@ _META_CONSTANTS = ("has_toolheadboard", "compatible_printers")
 
 
 class Selection:
-    def __init__(self, config_root, printer, board, toolhead, bed,
+    def __init__(self, config_root, printer, board, toolhead, hotend, bed,
                  accessories=None, constants=None):
         self.config_root = config_root
         self.printer = printer
         self.board = board
         self.toolhead = toolhead
+        self.hotend = hotend
         self.bed = bed
         self.accessories = list(accessories or [])
         self.constants = dict(constants or {})
@@ -66,6 +67,11 @@ def render(sel):
     add("Board", [_meta(root, "boards", sel.board, "config.cfg")], {})
     add_meta("Toolhead: %s" % sel.toolhead,
              _meta(root, "toolheads", sel.toolhead, "toolhead.cfg"))
+    # The hotend is a self-contained leaf: its [extruder]/[firmware_retraction]
+    # and its wiring sub-include live inside hotend.cfg, pulled in as one line
+    # (not walked/inlined) so the wiring sub-module is never surfaced.
+    add("Hotend: %s" % sel.hotend,
+        [_meta(root, "hotends", sel.hotend, "hotend.cfg")], {})
     add_meta("Bed: %s" % sel.bed, _meta(root, "beds", sel.bed, "bed.cfg"))
     for acc in sel.accessories:
         add_meta("Accessory: %s" % acc,

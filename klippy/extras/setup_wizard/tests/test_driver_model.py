@@ -18,6 +18,10 @@ def printer(name):
     return os.path.join(CONFIG_ROOT, "printers", name, "printer.cfg")
 
 
+def hotend(name):
+    return os.path.join(CONFIG_ROOT, "hotends", name, "hotend.cfg")
+
+
 class DriverModelTest(unittest.TestCase):
     def test_board_slots(self):
         self.assertEqual(driver_model.board_slots(board("btt-kraken")),
@@ -50,6 +54,23 @@ class DriverModelTest(unittest.TestCase):
         # ADXL/accessory boards have no _STEP aliases -> never offered.
         for b in t250 | t100:
             self.assertTrue(driver_model.board_slots(board(b)))
+
+
+class HeaterModelTest(unittest.TestCase):
+    def test_board_heaters_exclude_bed(self):
+        # Extruder heater slots a board offers, derived from *_HEATER aliases;
+        # BED_HEATER is the bed, not an extruder slot.
+        self.assertEqual(driver_model.board_heaters(board("btt-kraken")),
+                         {"E", "E1"})
+        self.assertEqual(driver_model.board_heaters(board("btt-skr-pico")),
+                         {"E"})
+
+    def test_collect_heater_aliases_follows_wiring(self):
+        # A hotend's heater need = the *_HEATER aliases its wiring leaf wires up.
+        self.assertEqual(driver_model.collect_heater_aliases(hotend("chc-pro")),
+                         {"E"})
+        self.assertEqual(driver_model.collect_heater_aliases(hotend("std6-v2")),
+                         {"E", "E1"})
 
 
 class FreeSlotGroupTest(unittest.TestCase):

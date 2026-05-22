@@ -13,6 +13,7 @@ import re
 from . import walker
 
 _STEP_ALIAS_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]*)_STEP\b")
+_HEATER_ALIAS_RE = re.compile(r"\b([A-Za-z][A-Za-z0-9]*)_HEATER\b")
 _TMC_SECT_RE = re.compile(r"^(tmc\d+)\s+(stepper_\w+|extruder)$", re.IGNORECASE)
 _TRUE = ("true", "1", "yes", "on")
 
@@ -43,6 +44,51 @@ def board_slots(board_cfg):
             slots.update(m.group(1).upper()
                          for m in _STEP_ALIAS_RE.finditer(line))
     return slots
+
+
+def board_heaters(board_cfg):
+    """Extruder heater slots a board offers = prefixes of <PREFIX>_HEATER pin
+    aliases, excluding the bed heater. Mirrors board_slots for the indexed-alias
+    convention (E, E1, ...), which is why E1_HEATER must not carry a _2 suffix."""
+    out = set()
+    with open(board_cfg, "r") as f:
+        for raw in f:
+            line = walker._strip_comment(raw)
+            out.update(m.group(1).upper()
+                       for m in _HEATER_ALIAS_RE.finditer(line))
+    out.discard("BED")
+    return out
+
+
+def collect_heater_aliases(path, _seen=None):
+    """Recursively follow includes from a hotend leaf and return the set of
+    <PREFIX>_HEATER alias prefixes its wiring references (excl. the bed):
+    default_wiring -> {E}, dual_wiring -> {E, E1}. Symmetric to board_heaters,
+    so a hotend fits a board when its heater set is covered by the board's."""
+    if _seen is None:
+        _seen = set()
+    path = os.path.abspath(path)
+    if path in _seen or not os.path.isfile(path):
+        return set()
+    _seen.add(path)
+    out = set()
+    base = os.path.dirname(path)
+    with open(path, "r") as f:
+        for raw in f:
+            line = walker._strip_comment(raw)
+            m = walker._SECT_RE.match(line)
+            if m:
+                inc = walker._INCLUDE_RE.match(m.group(1).strip())
+                if inc:
+                    spec = inc.group(1).strip()
+                    if not spec.startswith("if:"):
+                        child = os.path.normpath(os.path.join(base, spec))
+                        out |= collect_heater_aliases(child, _seen)
+                continue
+            out.update(m.group(1).upper()
+                       for m in _HEATER_ALIAS_RE.finditer(line))
+    out.discard("BED")
+    return out
 
 
 def board_drivers(board_cfg):

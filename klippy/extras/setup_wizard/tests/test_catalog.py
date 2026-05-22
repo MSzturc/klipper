@@ -36,6 +36,27 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual(opts["fysetc-pis"]["label"],
                          "FYSETC Portable Input Shaper")
 
+    def test_discover_hotends(self):
+        opts = {o["id"]: o for o in catalog.discover(CONFIG_ROOT, "hotends")}
+        self.assertEqual(opts["rapido-uhf"]["label"], "Rapido UHF")
+        self.assertEqual(opts["std6-v2"]["label"], "STD6 V2")
+
+    def test_hotends_for_kraken_include_dual_heater(self):
+        # The Kraken offers two heater pins -> every hotend, incl. the
+        # dual-cartridge STD6 V2, is offered.
+        ids = {o["id"]
+               for o in catalog.hotends_for_board(CONFIG_ROOT, "btt-kraken")}
+        self.assertIn("std6-v2", ids)
+        self.assertIn("rapido-uhf", ids)
+
+    def test_hotends_for_pico_exclude_dual_heater(self):
+        # The SKR Pico offers a single heater pin -> the dual-cartridge STD6 V2
+        # must be filtered out, single-heater hotends stay.
+        ids = {o["id"]
+               for o in catalog.hotends_for_board(CONFIG_ROOT, "btt-skr-pico")}
+        self.assertNotIn("std6-v2", ids)
+        self.assertIn("chc-pro", ids)
+
     def test_toolheads_compatible_with_t250(self):
         ids = {o["id"]
                for o in catalog.compatible(CONFIG_ROOT, "toolheads", "t250")}

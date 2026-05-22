@@ -18,9 +18,11 @@ class WalkerTest(unittest.TestCase):
                             "toolhead.cfg")
         includes, constants = walker.walk_meta(path)
         names = [os.path.basename(p) for p in includes]
+        # The hotend is its own wizard dimension now, so the toolhead pulls
+        # only its duct fans and the extruder drive -- no hotend leaf.
         self.assertEqual(names, [
             "part_fan_cpap.cfg", "hotend_fan.cfg", "side_blower_fan_dual.cfg",
-            "t250-bmg.cfg", "rapido-uhf.cfg",
+            "t250-bmg.cfg",
         ])
         self.assertEqual(constants.get("toolhead_label"), "DualHorn")
 
