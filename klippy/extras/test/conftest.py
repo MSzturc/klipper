@@ -85,11 +85,16 @@ class MockConfigError(Exception):
 class MockPrinter:
     config_error = MockConfigError
 
+    def __init__(self):
+        # Registered printer objects, keyed by section name. Lets a test wire
+        # up e.g. a [stepstick <name>] object for resolve_sense_resistor.
+        self.objects = {}
+
     def lookup_object(self, name, default=None):
-        return default
+        return self.objects.get(name, default)
 
     def load_object(self, config, name):
-        return None
+        return self.objects.get(name)
 
     def get_reactor(self):
         return None
@@ -297,10 +302,9 @@ def _last_tune_fields():
 def _load_tmc_module():
     """Import extras.tmc without triggering the full Klipper runtime.
 
-    tmc.py depends on 'stepper', 'extras.bulk_sensor', and
-    'extras.stepstick_defs' — all of which pull in MCU / serial layers
-    that don't exist on Windows.  We stub them out so only the pure-
-    Python autotune logic gets loaded.
+    tmc.py depends on 'stepper' and 'extras.bulk_sensor' — both of which
+    pull in MCU / serial layers that don't exist on Windows.  We stub them
+    out so only the pure-Python autotune logic gets loaded.
     """
     import sys
     import importlib.util
@@ -318,13 +322,10 @@ def _load_tmc_module():
         extras_pkg.__package__ = 'extras'
         sys.modules['extras'] = extras_pkg
 
-    # Stub out the three heavy imports that tmc.py does at module level
-    for stub_name in ('stepper', 'extras.bulk_sensor', 'extras.stepstick_defs'):
+    # Stub out the heavy imports that tmc.py does at module level
+    for stub_name in ('stepper', 'extras.bulk_sensor'):
         if stub_name not in sys.modules:
-            stub = types.ModuleType(stub_name)
-            if stub_name == 'extras.stepstick_defs':
-                stub.STEPSTICK_DEFS = {}
-            sys.modules[stub_name] = stub
+            sys.modules[stub_name] = types.ModuleType(stub_name)
 
     tmc_path = os.path.join(os.path.dirname(__file__), '..', 'tmc.py')
     spec = importlib.util.spec_from_file_location(

@@ -116,6 +116,16 @@ class GeneratorTest(unittest.TestCase):
                                 CONFIG_ROOT)
         self.assertTrue(fc.has_section("gcode_arcs"))
 
+    def test_stepper_databases_ride_in_via_base_layer(self):
+        # The motor + stepstick reference libraries live in the config tree and
+        # come in through the always-included base layer, so the rendered config
+        # carries the [motor_constants]/[stepstick] sections the autotune
+        # drivers resolve against.
+        fc = generator.validate(generator.render(self._t250_selection()),
+                                CONFIG_ROOT)
+        self.assertTrue(fc.has_section("motor_constants moons-cse14hra1l410a"))
+        self.assertTrue(fc.has_section("stepstick KRAKEN_2160_8A"))
+
     def test_t250_probe_carries_required_z_offset(self):
         # BDsensor.load_config reads z_offset with no default, so the assembled
         # config must supply it. The legacy template did this via a [BDsensor]

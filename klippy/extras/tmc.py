@@ -3,9 +3,9 @@
 # Copyright (C) 2018-2020  Kevin O'Connor <kevin@koconnor.net>
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
-import logging, math, os, collections
+import logging, math, collections
 import stepper
-from . import bulk_sensor, stepstick_defs
+from . import bulk_sensor
 
 
 ######################################################################
@@ -14,38 +14,30 @@ from . import bulk_sensor, stepstick_defs
 
 # Resolve the sense-resistor value for a TMC driver config section.  The
 # user may supply 'sense_resistor' explicitly, or a 'stepstick_type' that
-# maps to a (sense_resistor, max_current) pair via stepstick_defs.  At
+# names a [stepstick <name>] section (carrier data shipped as config).  At
 # least one of the two must be set; configs that omit both fail to load.
 # Returns (sense_resistor, max_current) — max_current is None if no
 # stepstick_type was given (callers fall back to a per-driver default).
-def _ensure_motor_database_loaded(printer, config):
-    # Read the bundled motor_database.cfg once per printer and register
-    # every [motor_constants <name>] section it contains.  Idempotent:
-    # the printer attribute guards re-entry so repeated calls from each
-    # TMC helper at config time collapse to a single parse.
-    if getattr(printer, '_tmc_motor_db_loaded', False):
-        return
-    printer._tmc_motor_db_loaded = True
-    cfg_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                            'motor_database.cfg')
-    configfile = printer.lookup_object('configfile')
-    try:
-        motor_db = configfile.read_config(cfg_path)
-    except Exception as e:
-        raise printer.config_error(
-            "tmc: cannot load bundled motor database '%s' (%s)"
-            % (cfg_path, e))
-    for section in motor_db.get_prefix_sections('motor_constants '):
-        name = section.get_name()
-        # User-defined [motor_constants <name>] takes priority over the
-        # bundled database.  Skip the bundled entry when the user's config
-        # already declares a section with the same name so that
-        # load_object's early-return (section already in printer.objects)
-        # never silently discards the user's definition regardless of the
-        # order sections appear in the config file.
-        if config.fileconfig.has_section(name):
-            continue
-        printer.load_object(motor_db, name)
+def _lookup_stepstick(config, name):
+    # [stepstick <name>] sections come from the config (included by the base
+    # layer), so they normally exist before the driver inits.  Force-load the
+    # one we need if section ordering left it uninstantiated -- the same lazy
+    # resolve as [motor_constants <name>], with no file path in the firmware.
+    printer = config.get_printer()
+    section = 'stepstick ' + name
+    obj = printer.lookup_object(section, None)
+    if obj is None:
+        try:
+            obj = printer.load_object(config, section)
+        except config.error:
+            obj = None
+    if obj is None:
+        raise config.error(
+            "Unknown stepstick_type '%s' in section '%s'. Define a "
+            "[stepstick %s] section (THEOS-Configuration ships the carrier "
+            "database in steppers/database/stepsticks.cfg)."
+            % (name, config.get_name(), name))
+    return obj
 
 
 def resolve_sense_resistor(config, required=True):
@@ -53,18 +45,14 @@ def resolve_sense_resistor(config, required=True):
     stepstick = config.get('stepstick_type', None)
     lookup_sr = lookup_max = None
     if stepstick is not None:
-        if stepstick not in stepstick_defs.STEPSTICK_DEFS:
-            raise config.error(
-                "Unknown stepstick_type '%s' in section '%s'. "
-                "See klippy/extras/stepstick_defs.py for valid values."
-                % (stepstick, config.get_name()))
-        lookup_sr, lookup_max = stepstick_defs.STEPSTICK_DEFS[stepstick]
+        carrier = _lookup_stepstick(config, stepstick)
+        lookup_sr, lookup_max = carrier.sense_resistor, carrier.max_current
     sense_resistor = explicit if explicit is not None else lookup_sr
     if sense_resistor is None and required:
         raise config.error(
             "Section '%s' must specify either 'sense_resistor' or "
             "'stepstick_type' so the driver knows the correct sense "
-            "resistance.  See klippy/extras/stepstick_defs.py for the "
+            "resistance.  See steppers/database/stepsticks.cfg for the "
             "list of supported stepstick boards."
             % (config.get_name(),))
     return sense_resistor, lookup_max
@@ -1016,16 +1004,10 @@ class BaseTMCCurrentHelper:
         # plain register override; the only thing that gets skipped is
         # the chopper / hysteresis / stallguard derivation.
         self.motor = config.get('motor', None)
-        # Auto-load the bundled motor_database.cfg whenever a stepper
-        # references a motor.  The database lives under klippy/extras/
-        # alongside this module — outside the user's config search path —
-        # so users would otherwise need to copy it next to printer.cfg
-        # before [include motor_database.cfg] would resolve.  Each TMC
-        # helper that asks for it triggers _ensure_motor_database_loaded;
-        # the helper itself deduplicates so the parse runs only once per
-        # printer instance.
-        if self.motor is not None:
-            _ensure_motor_database_loaded(self.printer, config)
+        # The [motor_constants <name>] sections are config-defined (shipped in
+        # THEOS-Configuration's steppers/database/motors.cfg and pulled in by
+        # the base layer), so they are instantiated like any other config
+        # object; tune_driver() resolves the named motor at runtime.
         self.voltage = config.getfloat('voltage', None,
                                        above=0., maxval=60.)
         self.pwm_freq_target = config.getfloat(

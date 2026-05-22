@@ -37,9 +37,9 @@ Every TMC stepper section must specify the carrier-board's sense resistance, eit
 |-----------|-------|---------|
 | `sense_resistor` | `[tmc2130 stepper_*]`, `[tmc2660 stepper_*]`, `[tmc5160 stepper_*]` | Sense resistor value in ohms. Mandatory. |
 | `rref` | `[tmc2240 stepper_*]` | TMC2240 reference resistor (12000–60000 Ω). Mandatory. |
-| `stepstick_type` | any TMC stepper section | Carrier-board name; resolves to `(sense_resistor, max_current)` via the bundled lookup table. Use this *or* `sense_resistor`, not both. On TMC2240 only the `max_current` portion is consumed (the chip uses `rref` instead of a sense resistor); the `sense_resistor` entry is ignored. |
+| `stepstick_type` | any TMC stepper section | Carrier-board name; resolves to `(sense_resistor, max_current)` via the stepstick database. Use this *or* `sense_resistor`, not both. On TMC2240 only the `max_current` portion is consumed (the chip uses `rref` instead of a sense resistor); the `sense_resistor` entry is ignored. |
 
-Supported `stepstick_type` values: `REFERENCE_WOTT`, `REFERENCE_2209`, `REFERENCE_5160`, `KRAKEN_2160_8A`, `KRAKEN_2160_3A`, `BTT_2240`, `BTT_EZ_5160_PRO`, `BTT_EZ_5160_RGB`, `BTT_EZ_6609`, `BTT_5160T`, `WOTT_2209`, `COREVUS_2209`, `COREVUS_2160_OLD`, `COREVUS_2160_5A`, `COREVUS_2160`, `FYSETC_2225`, `FYSETC_5161`, `MKS_2226`, `MELLOW_FLY_5160`, `MELLOW_FLY_HV_5160_Pro`. New entries can be added to `klippy/extras/stepstick_defs.py`.
+Supported `stepstick_type` values: `REFERENCE_WOTT`, `REFERENCE_2209`, `REFERENCE_5160`, `KRAKEN_2160_8A`, `KRAKEN_2160_3A`, `BTT_2240`, `BTT_EZ_5160_PRO`, `BTT_EZ_5160_RGB`, `BTT_EZ_6609`, `BTT_5160T`, `WOTT_2209`, `COREVUS_2209`, `COREVUS_2160_OLD`, `COREVUS_2160_5A`, `COREVUS_2160`, `FYSETC_2225`, `FYSETC_5161`, `MKS_2226`, `MELLOW_FLY_5160`, `MELLOW_FLY_HV_5160_Pro`. New carriers can be added as `[stepstick <name>]` sections in `config/steppers/database/stepsticks.cfg`.
 
 ### Autotuning
 
@@ -47,7 +47,7 @@ Activated when both `motor:` and `voltage:` are present on a TMC stepper section
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `motor` | unset | Name of a `[motor_constants <name>]` section that describes the motor (resistance, inductance, holding_torque, max_current, steps_per_revolution). The bundled `motor_database.cfg` contains specs for ~100 common stepper models; `[include motor_database.cfg]` from your printer.cfg to pull them all in. |
+| `motor` | unset | Name of a `[motor_constants <name>]` section that describes the motor (resistance, inductance, holding_torque, max_current, steps_per_revolution). `config/steppers/database/motors.cfg` ships specs for ~120 common stepper models and is pulled in automatically by the THEOS base layer. |
 | `voltage` | unset | Stepper supply voltage, 0–60 V. Required for back-EMF / PWM-grad math. |
 | `tuning_goal` | `balanced` | `performance` / `balanced` / `silent`. See *Tuning goals* below. |
 | `pwm_freq_target` | 55 kHz (20 kHz on TMC2240) | StealthChop PWM frequency target, 10–100 kHz. TMC2240 runs hot at the higher target so it defaults lower. |
@@ -58,7 +58,7 @@ Activated when both `motor:` and `voltage:` are present on a TMC stepper section
 | `high_velocity_threshold` | unset | Velocity (in mm/s) above which the high-velocity register set engages (THIGH). Mutually exclusive with `driver_THIGH:`. |
 | `stealthchop_threshold` | unset | Velocity (in mm/s) below which StealthChop is active. Translated to TPWMTHRS at config-time. Three-tier precedence: `driver_TPWMTHRS` > `stealthchop_threshold` > goal-default. |
 
-The bundled `[motor_constants <name>]` sections (in `motor_database.cfg`) cover the major stepper-motor manufacturers: LDO, Moons, OMC, Stepperonline, Wantai, MOTECH, Trinamic, Phidgets, Soyo, BTT, BIQU, etc. Each section provides `resistance`, `inductance`, `holding_torque`, `max_current`, and `steps_per_revolution` from the manufacturer's datasheet.
+The `[motor_constants <name>]` sections (in `config/steppers/database/motors.cfg`) cover the major stepper-motor manufacturers: LDO, Moons, OMC, Stepperonline, Wantai, MOTECH, Trinamic, Phidgets, Soyo, BTT, BIQU, etc. Each section provides `resistance`, `inductance`, `holding_torque`, `max_current`, and `steps_per_revolution` from the manufacturer's datasheet.
 
 ### Tuning goals
 
@@ -207,7 +207,8 @@ The homing profile additionally turns CoolStep off (`semin/semax/seup/sedn/seimi
 A single TMC2240-driven X axis on a BTT 2240 stepstick at 24 V, with autotuning, sensorless homing, and the per-stepper homing profile:
 
 ```ini
-[include motor_database.cfg]
+# The motor and stepstick databases load automatically via the THEOS base
+# layer, so `motor:` and `stepstick_type:` resolve without any extra include.
 
 [tmc2240 stepper_x]
 uart_pin: PB1
