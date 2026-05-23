@@ -373,16 +373,35 @@ class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
             globalscaler = 0
         return globalscaler
     def _calc_current_bits(self, current):
-        if self.cs is None:
-            # Auto: pick the smallest IRUN that, with GLOBALSCALER fixed
-            # at its maximum, can deliver Ipeak = current * sqrt(2) given
-            # the configured sense resistor.  Subtracting 1 converts
-            # "32 levels" to the 0..31 register encoding.
-            ipeak = current * math.sqrt(2.)
-            cs = int(math.ceil(self.sense_resistor * 32. * ipeak / 0.32) - 1)
-        else:
-            cs = self.cs
-        return max(0, min(31, cs))
+        if self.cs is not None:
+            return max(0, min(31, self.cs))
+        ipeak = current * math.sqrt(2.)
+        # Smallest CS that delivers Ipeak at GLOBALSCALER=max (256).  This is
+        # the minimum-CS / maximum-GLOBALSCALER pick: best absolute current
+        # accuracy (GLOBALSCALER is the finer 8-bit knob).
+        cs_min = int(math.ceil(self.sense_resistor * 32. * ipeak / 0.32) - 1)
+        cs_min = max(0, min(31, cs_min))
+        if self.tuning_goal == 'performance':
+            return cs_min
+        # Quiet goals: keep CS as high as the datasheet recommends (IRUN in the
+        # 16-31 band gives best microstep-wave quality, datasheet 6.5/9) while
+        # GLOBALSCALER stays inside the encodable [32, 256] window.  Pick the
+        # largest CS whose GLOBALSCALER does not fall below 32.
+        cs = cs_min
+        for candidate in range(31, cs_min - 1, -1):
+            gs = (current * 256. * math.sqrt(2.) * self.sense_resistor * 32.
+                  / (VREF * (1. + candidate)))
+            if gs >= 32.:
+                cs = candidate
+                break
+        return cs
+    def _hysteresis_scale(self, current):
+        # Hysteresis must be derived for the CS the driver is actually
+        # programmed to, so HSTRT/HEND match the real wave amplitude.  An
+        # explicit driver_cs pin still wins.
+        if self.cs is not None:
+            return self.cs
+        return self._calc_current_bits(current)
     def _calc_current(self, run_current, hold_current):
         gscaler = self._calc_globalscaler(run_current)
         irun = self._calc_current_bits(run_current)

@@ -641,3 +641,55 @@ class TestBlankTimeGoalDefaults:
         tune_invocation(motor=mock_motor, tuning_goal='silent',
                         pins={'driver_TBL': 0, 'driver_TOFF': 5})
         assert _last_tune_fields().get_field('tbl') == 0
+
+
+class TestCurrentStrategy:
+    """Datasheet 6.5/9: keep IRUN (CS) in the 16-31 band for best microstep
+    performance and trim with GLOBALSCALER. The quiet goals follow that;
+    performance keeps the min-CS (best absolute current accuracy) path."""
+
+    def _helper(self, tuning_goal, sense_resistor=0.075, cs=None):
+        from .conftest import _load_tmc5160_module, MockPrinter
+        tmc5160 = _load_tmc5160_module()
+        h = object.__new__(tmc5160.TMC5160CurrentHelper)
+        h.cs = cs
+        h.sense_resistor = sense_resistor
+        h.tuning_goal = tuning_goal
+        h.printer = MockPrinter()
+        h.name = "stepper_x"
+        return h
+
+    def test_quiet_goals_keep_cs_high(self):
+        for goal in ('silent', 'balanced'):
+            h = self._helper(goal)
+            cs = h._calc_current_bits(0.8)
+            assert 16 <= cs <= 31, (goal, cs)
+            gs = h._calc_globalscaler(0.8)
+            assert gs == 0 or 32 <= gs <= 256, (goal, gs)
+
+    def test_performance_keeps_min_cs(self):
+        h = self._helper('performance')
+        # original min-CS formula: ceil(0.075*32*0.8*sqrt2/0.32)-1 == 8
+        assert h._calc_current_bits(0.8) == 8
+
+    def test_driver_cs_pin_overrides_all_goals(self):
+        for goal in ('silent', 'balanced', 'performance'):
+            h = self._helper(goal, cs=20)
+            assert h._calc_current_bits(0.8) == 20
+
+    def test_each_goal_covers_target_within_one_quantum(self):
+        import math
+        VREF = 0.325
+        def delivered(h, current):
+            cs = h._calc_current_bits(current)
+            gs = h._calc_globalscaler(current) or 256
+            return gs * (cs + 1) * VREF / (256. * 32. * math.sqrt(2.)
+                                           * h.sense_resistor)
+        for goal in ('performance', 'silent', 'balanced'):
+            d = delivered(self._helper(goal), 0.8)
+            assert d >= 0.8 - 1e-9, (goal, d)        # covers the request
+            assert d <= 0.8 * 1.13, (goal, d)        # within one quantum
+
+    def test_hysteresis_scale_tracks_run_cs(self):
+        h = self._helper('silent')
+        assert h._hysteresis_scale(0.8) == h._calc_current_bits(0.8)
