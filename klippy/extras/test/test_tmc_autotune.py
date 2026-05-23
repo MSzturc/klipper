@@ -621,3 +621,23 @@ class TestCapabilityGate:
         proxy.name = "stepper_x"
         proxy._autotune_skip_logged = False
         proxy.tune_driver()  # must not raise
+
+
+class TestBlankTimeGoalDefaults:
+    """AN-001: blank time should start around 1-2 us; the TMC5160 drives
+    external MOSFETs (AN-006) whose ringing the blank time must cover.
+    Autotune defaults TBL goal-aware instead of always 0."""
+
+    def test_silent_balanced_default_tbl_2(self, mock_motor):
+        for goal in ('silent', 'balanced'):
+            tune_invocation(motor=mock_motor, tuning_goal=goal)
+            assert _last_tune_fields().get_field('tbl') == 2, goal
+
+    def test_performance_default_tbl_1(self, mock_motor):
+        tune_invocation(motor=mock_motor, tuning_goal='performance')
+        assert _last_tune_fields().get_field('tbl') == 1
+
+    def test_driver_tbl_pin_wins(self, mock_motor):
+        tune_invocation(motor=mock_motor, tuning_goal='silent',
+                        pins={'driver_TBL': 0, 'driver_TOFF': 5})
+        assert _last_tune_fields().get_field('tbl') == 0

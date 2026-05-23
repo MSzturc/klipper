@@ -1576,7 +1576,16 @@ class BaseTMCCurrentHelper:
     def _configure_spreadcycle(self, motor_object, new_current):
         calc_freq = self._calc_freq    # set by _configure_pwm just above
         ncycles = int(math.ceil(self.driver_clock_frequency / calc_freq))
-        tbl = self.tbl or 0
+        # Goal-aware comparator blank time (AN-001: 1-2 us starting point; the
+        # TMC5160 drives external MOSFETs whose switching ringing the blank
+        # time must cover — see AN-006).  performance favours a higher chopper
+        # frequency (lower TBL); the quiet goals favour ringing margin and
+        # wave quality (higher TBL).  A driver_TBL pin overrides; the TOFF=1
+        # / min_tbl_at_min_toff correction below still applies.
+        if self.tbl is not None:
+            tbl = self.tbl
+        else:
+            tbl = {'performance': 1, 'balanced': 2, 'silent': 2}[self.tuning_goal]
         tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
         # If the user pinned driver_TOFF, honour it; otherwise search for
         # the smallest TOFF whose lowest chopper frequency stays at or
