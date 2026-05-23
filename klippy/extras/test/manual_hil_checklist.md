@@ -22,7 +22,6 @@ Set `tuning_goal: performance` for X/Y/Z/E in printer.cfg, restart Klipper.
   - `vhighfs = 1, vhighchm = 1`
   - `THIGH > 0` and `< 0xfffff` (active high-speed mode)
   - `sfilt = 0`
-  - `dc_time, dc_sg` populated to non-default values
 - [ ] Print a 3DBenchy at 1000 mm/s travel, 800 mm/s outer wall.
   Expected: completes without layer shift; some audible SpreadCycle
   hissing during prints.

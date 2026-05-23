@@ -9,11 +9,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from .conftest import MockConfig, MockConfigError, tune_invocation, _last_tune_fields
 
 
-def _read_dcctrl_field(field_name):
-    """Helper: read DCCTRL field shadow from the most recent tune_invocation."""
-    return _last_tune_fields().get_field(field_name)
-
-
 class TestTestHarness:
     """Smoke tests for the mock infrastructure itself."""
 
@@ -316,61 +311,6 @@ class TestDrvConfAutotune:
         assert result['filt_isense'] == 0
 
 
-class TestDcCtrlAutotune:
-    """DCCTRL register definition + auto-derive for dcStep."""
-
-    def test_dcctrl_fields_defined(self):
-        import sys, importlib.util, types, os
-        # Stub out heavy runtime imports so tmc5160 can be loaded on Windows.
-        if 'extras.bus' not in sys.modules:
-            sys.modules['extras.bus'] = types.ModuleType('extras.bus')
-        if 'extras.tmc2130' not in sys.modules:
-            stub_tmc2130 = types.ModuleType('extras.tmc2130')
-            stub_tmc2130.FieldFormatters = {}
-            stub_tmc2130.MCU_TMC_SPI = object
-            sys.modules['extras.tmc2130'] = stub_tmc2130
-        tmc5160_path = os.path.join(
-            os.path.dirname(__file__), '..', 'tmc5160.py')
-        spec = importlib.util.spec_from_file_location(
-            'extras.tmc5160', os.path.abspath(tmc5160_path))
-        mod = importlib.util.module_from_spec(spec)
-        sys.modules['extras.tmc5160'] = mod
-        spec.loader.exec_module(mod)
-        assert "DCCTRL" in mod.Fields
-        assert "dc_time" in mod.Fields["DCCTRL"]
-        assert "dc_sg" in mod.Fields["DCCTRL"]
-
-    def test_dc_time_pin_respected(self, mock_motor):
-        result = tune_invocation(motor=mock_motor, tuning_goal='performance',
-                                 pins={"driver_DC_TIME": 100})
-        assert _read_dcctrl_field('dc_time') == 100
-
-    def test_dc_sg_pin_respected(self, mock_motor):
-        result = tune_invocation(motor=mock_motor, tuning_goal='performance',
-                                 pins={"driver_DC_SG": 16})
-        assert _read_dcctrl_field('dc_sg') == 16
-
-    def test_dc_time_auto_derive_performance(self, mock_motor):
-        # performance goal computes dc_time from motor params
-        result = tune_invocation(motor=mock_motor, tuning_goal='performance')
-        dc_time = _read_dcctrl_field('dc_time')
-        assert dc_time >= 30  # AN-003 typical lower bound
-        assert dc_time <= 200  # sanity upper bound
-
-    def test_dc_sg_is_dc_time_over_16(self, mock_motor):
-        result = tune_invocation(motor=mock_motor, tuning_goal='performance')
-        dc_time = _read_dcctrl_field('dc_time')
-        dc_sg = _read_dcctrl_field('dc_sg')
-        assert dc_sg == max(1, dc_time // 16)
-
-    def test_balanced_silent_dont_compute_dcctrl(self, mock_motor):
-        # In balanced/silent the values are written for determinism,
-        # but vhighchm=0 means they have no hardware effect.
-        for goal in ('balanced', 'silent'):
-            r = tune_invocation(motor=mock_motor, tuning_goal=goal)
-            assert _read_dcctrl_field('dc_time') >= 0  # written, not crashing
-
-
 class TestShortConfValidation:
     """VS-aware SHORT_CONF validation."""
 
@@ -431,9 +371,10 @@ class TestUserStoryCoverage:
         result = tune_invocation(motor=mock_motor, tuning_goal='balanced')
         assert result['sfilt'] == 1
 
-    def test_performance_enables_dcstep(self, mock_motor):
+    def test_performance_enables_highspeed_fullstep(self, mock_motor):
         # Top-speed step loss: performance enables vhighfs+vhighchm above
-        # THIGH which activates dcStep, recovering torque at high RPM.
+        # THIGH (high-velocity full-step chopper mode), recovering torque at
+        # high RPM.
         result = tune_invocation(motor=mock_motor, tuning_goal='performance')
         assert result['vhighfs'] == 1
         assert result['vhighchm'] == 1
@@ -455,7 +396,7 @@ class TestUserStoryCoverage:
 class TestStealthChopGoalAndPinning:
     """en_pwm_mode goal-gating, stealthchop_threshold pin precedence,
     voltage-aware maxpwmrps, goal-specific chopper-frequency targets, and
-    TOFF/TBL/dcStep boundary conflicts."""
+    TOFF/TBL boundary conflicts."""
 
     # balanced/silent goals must set en_pwm_mode=1
     def test_balanced_enables_stealthchop(self, mock_motor):
@@ -558,15 +499,6 @@ class TestStealthChopGoalAndPinning:
         tbl = _last_tune_fields().get_field('tbl')
         assert tbl >= 1, "autotune must bump TBL when TOFF=1 and TBL would be 0"
 
-    # dcStep enabled with TOFF<3 must raise config error
-    def test_dcstep_with_low_toff_raises(self, mock_motor):
-        # vhighfs=1 + vhighchm=1 (dcStep active) requires TOFF>=3
-        with pytest.raises(Exception, match="(?i)TOFF.*3|dcStep|TOFF.*datas"):
-            tune_invocation(motor=mock_motor, tuning_goal='performance',
-                            pins={'driver_VHIGHFS': True,
-                                  'driver_VHIGHCHM': True,
-                                  'driver_TOFF': 2})
-
 
 class TestPerformancePinnedStealthChop:
     """The performance goal still sets en_pwm_mode based on TPWMTHRS — a
@@ -626,17 +558,6 @@ class TestSentinelHandlingAndAutotuneOffValidation:
         cfg = MockConfig(values={'driver_TOFF': 1, 'driver_TBL': 0})
         with pytest.raises(MockConfigError,
                            match="(?i)TOFF.*TBL|TBL.*TOFF|driver_TOFF"):
-            tmc5160_mod._validate_chopconf(cfg)
-
-    def test_autotune_off_dcstep_low_toff_raises(self):
-        # autotune-OFF: vhighfs=1 + vhighchm=1 + driver_TOFF=2 must error.
-        from .conftest import _load_tmc5160_module
-        tmc5160_mod = _load_tmc5160_module()
-        cfg = MockConfig(values={'driver_VHIGHFS': 1,
-                                 'driver_VHIGHCHM': 1,
-                                 'driver_TOFF': 2})
-        with pytest.raises(MockConfigError,
-                           match="(?i)TOFF.*3|dcStep|TOFF.*datas"):
             tmc5160_mod._validate_chopconf(cfg)
 
     def test_autotune_off_valid_chopconf_no_raise(self):

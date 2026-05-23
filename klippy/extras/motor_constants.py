@@ -101,17 +101,6 @@ class MotorConstants:
                      cs, hysteresis, hstrt - 1, hend + 3)
         return hstrt - 1, hend + 3
 
-    # Compute the dcStep commutation reference pulse width based on
-    # motor inductance, supply voltage, and operating current.  AN-003
-    # §4 derives this from the time it takes one motor pole pair to
-    # traverse one full microstep at peak current.  Returns seconds.
-    def commutation_time(self, voltage, current):
-        import math
-        I = current * math.sqrt(2)
-        # Time to ramp from 0 to Ipeak through the motor inductance:
-        # t = L*I/V (single-pole RL approximation)
-        return self.L * I / voltage
-
 
 def load_config_prefix(config):
     return MotorConstants(config)

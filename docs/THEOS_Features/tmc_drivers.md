@@ -4,7 +4,7 @@
 
 Trinamic's TMC stepper drivers (TMC2130, TMC2208/2209, TMC2240, TMC2660, TMC5160) expose dozens of tunable register fields that determine how the chopper switches the motor coils, how StealthChop crosses over to SpreadCycle, how StallGuard reads back-EMF, how CoolStep modulates current under load, and how the regulator quantises run/hold/home currents. Stock Klipper exposes those fields for manual tuning. This fork adds four things on top of the stock driver layer:
 
-1. **A motor-data-driven autotuning subsystem** that derives the chopper, hysteresis, StallGuard, CoolStep, overvoltage, high-velocity, dcStep, and PWM register fields from the motor's electrical specification (resistance, inductance, holding torque, rated current) plus the supply voltage. You point a TMC stepper at a `[motor_constants <name>]` section and a `voltage:` value; everything else is computed at every (re-)apply of the run current.
+1. **A motor-data-driven autotuning subsystem** that derives the chopper, hysteresis, StallGuard, CoolStep, overvoltage, high-velocity, and PWM register fields from the motor's electrical specification (resistance, inductance, holding torque, rated current) plus the supply voltage. You point a TMC stepper at a `[motor_constants <name>]` section and a `voltage:` value; everything else is computed at every (re-)apply of the run current.
 
 2. **Three named tuning goals — `performance`, `balanced`, `silent`** — selectable per stepper via `tuning_goal:`. The goal is the macro-level lever above the register fields: it expresses *what the user wants* (max acceleration / daily-driver / minimum noise) and the autotune translates that intent into ~30 coordinated register choices. Default is `balanced`.
 
@@ -64,9 +64,9 @@ The `[motor_constants <name>]` sections (in `config/steppers/database/motors.cfg
 
 The three tuning goals encapsulate three different operating points. Pick one per stepper based on what the axis is doing, not based on the motor type — the same motor wants different settings at the X/Y carriage versus the Z lead-screw.
 
-- **`performance`** — max acceleration / torque headroom. SpreadCycle dominant, dcStep + VHIGH-Fullstep active above THIGH so the driver keeps torque at top speed by switching to step-pulse-counting. Audible SpreadCycle hissing as background noise. Pick this for X/Y on a CoreXY when you push high accelerations and care about not skipping steps.
-- **`balanced`** (default) — daily-driver. StealthChop low-speed, SpreadCycle at print speed, no dcStep, smoothed CoolStep (`sfilt=1`, `iholddelay=10`) so coil current does not breathe under varying load. Pick this when you don't have a strong preference; it's a good compromise for hours-long prints. This is the default for any autotune-active stepper section without `tuning_goal:`.
-- **`silent`** — minimum audible noise. StealthChop until the physical PWM-tracking limit (1.2 × vmaxpwm), CoolStep disabled (`semin=0`) so there is no current-modulation noise, `small_hysteresis=1` for smoother microstep transitions, `TPFD=0` to remove passive-fast-decay artefacts, ultrasonic chopper target (45 kHz) above human hearing. Significantly reduced peak torque, no dcStep step-loss protection. Pick this for Z and extruder where audible noise dominates and the load is light.
+- **`performance`** — max acceleration / torque headroom. SpreadCycle dominant, VHIGH full-step active above THIGH so the driver keeps torque at top speed by switching to full-step. Audible SpreadCycle hissing as background noise. Pick this for X/Y on a CoreXY when you push high accelerations and care about not skipping steps.
+- **`balanced`** (default) — daily-driver. StealthChop low-speed, SpreadCycle at print speed, no VHIGH full-step, smoothed CoolStep (`sfilt=1`, `iholddelay=10`) so coil current does not breathe under varying load. Pick this when you don't have a strong preference; it's a good compromise for hours-long prints. This is the default for any autotune-active stepper section without `tuning_goal:`.
+- **`silent`** — minimum audible noise. StealthChop until the physical PWM-tracking limit (1.2 × vmaxpwm), CoolStep disabled (`semin=0`) so there is no current-modulation noise, `small_hysteresis=1` for smoother microstep transitions, `TPFD=0` to remove passive-fast-decay artefacts, ultrasonic chopper target (45 kHz) above human hearing. Significantly reduced peak torque; no VHIGH full-step torque mode. Pick this for Z and extruder where audible noise dominates and the load is light.
 
 The goal is a **starting point**, not a constraint: any field listed in *Pin-respecting field overrides* below can be pinned via `driver_X:` to override the goal default. The autotune solves for the unpinned fields around your pin.
 
@@ -79,8 +79,7 @@ The following table is the canonical reference for what each goal sets at the re
 | **StealthChop / SpreadCycle crossover** | | | |
 | TPWMTHRS | `0xfffff` (StealthChop never) | `0.3 × vmaxpwm` | `1.2 × vmaxpwm` |
 | THIGH | `1.2 × vmaxpwm × rotation_distance` | `0` (window open) | `0` (window open) |
-| vhighfs / vhighchm | True / True (dcStep active) | False / False | False / False |
-| dc_time / dc_sg | auto from motor (AN-003 §4) | inactive (vhighchm=0) | inactive |
+| vhighfs / vhighchm | True / True (VHIGH full-step active) | False / False | False / False |
 | **PWM tuning** | | | |
 | chopper_freq_target | 20 kHz | 35 kHz | 45 kHz (ultrasonic) |
 | pwm_reg | 15 (fast PI) | 8 (moderate) | 4 (smooth) |
@@ -118,7 +117,6 @@ Any of the following register fields can be pinned in the config via `driver_X:`
 | CoolStep + IHOLDDELAY | `driver_SEMIN`, `driver_SEMAX`, `driver_SEUP`, `driver_SEDN`, `driver_SEIMIN`, `driver_SFILT`, `driver_IHOLDDELAY` |
 | Velocity thresholds + high-speed | `driver_TCOOLTHRS`, `driver_THIGH`, `driver_VHIGHFS`, `driver_VHIGHCHM` |
 | TMC5160 DRV_CONF | `driver_FILT_ISENSE`, `driver_OTSELECT`, `driver_DRVSTRENGTH`, `driver_BBMTIME`, `driver_BBMCLKS` |
-| TMC5160 DCCTRL (dcStep) | `driver_DC_TIME`, `driver_DC_SG` |
 | TMC5160 SHORT_CONF | `driver_S2VS_LEVEL`, `driver_S2G_LEVEL`, `driver_SHORT_FILTER`, `driver_SHORTDELAY` |
 
 **Three-tier precedence for velocity-form thresholds.** The autotune resolves TCOOLTHRS, THIGH, and TPWMTHRS in this order:
@@ -168,23 +166,11 @@ Per TMC5160 datasheet §6.3, when the supply voltage exceeds 52 V the `s2g_level
 
 Pure footgun-prevention; no performance impact for properly-configured printers.
 
-### TMC5160 dcStep tuning (DCCTRL)
-
-dcStep is the TMC5160's step-loss-protection mode: above THIGH, with `vhighfs` and `vhighchm` both set, the chip uses load-angle feedback to count step pulses rather than rely on the chopper to deliver each microstep. The two tuning fields live in the DCCTRL register (`0x6E`):
-
-| Field | Auto-derived as | Source |
-|---|---|---|
-| `dc_time` | motor commutation time, `t = L × Ipeak / V` (single-pole RL approximation) | TMC AN-003 §4.1 |
-| `dc_sg` | `dc_time / 16` | TMC AN-003 §4.2 default |
-
-`driver_DC_TIME:` and `driver_DC_SG:` override the derivation. Active under `tuning_goal: performance` where vhighfs and vhighchm are both enabled; the values are written for deterministic register state under `balanced` / `silent` but inactive there.
-
 ### CHOPCONF boundary validation
 
-Two TMC5160 datasheet constraints are enforced at config-load time, regardless of whether the autotune is active:
+One TMC5160 datasheet constraint is enforced at config-load time, regardless of whether the autotune is active:
 
 - **TOFF=1 with TBL=0 is rejected** (datasheet §5.2 CHOPCONF). When the user explicitly pins both `driver_TOFF: 1` and `driver_TBL: 0`, the driver raises a `config error` rather than silently bumping TBL to 1. When only one of the two is pinned, the autotune is allowed to correct the other.
-- **dcStep with `TOFF < 3` is rejected** (datasheet §13.2). When `driver_VHIGHFS: 1`, `driver_VHIGHCHM: 1`, and `driver_TOFF: <3>` are all pinned, the driver raises a `config error` — dcStep needs at least three chopper cycles to establish load-angle feedback.
 
 ### Per-stepper homing profile
 
@@ -236,7 +222,7 @@ endstop_pin: tmc2240_stepper_x:virtual_endstop
 homing_speed: 50
 ```
 
-A TMC5160 axis configured for max acceleration with a custom dcStep sensitivity:
+A TMC5160 axis configured for max acceleration:
 
 ```ini
 [tmc5160 stepper_x]
@@ -250,7 +236,6 @@ motor: ldo-42sth48-2504ac
 voltage: 48
 tuning_goal: performance
 
-driver_DC_SG: 16     # tighten dcStep load-angle threshold
 driver_S2VS_LEVEL: 6
 driver_S2G_LEVEL: 12
 
@@ -304,7 +289,7 @@ Configs with autotune ON (both `motor:` and `voltage:` set) but no explicit `tun
 | pwm_reg=15, pwm_lim=4 | pwm_reg=8, pwm_lim=8 | Smoother current behaviour, less PI overshoot |
 | sfilt=0 | sfilt=1 | More stable CoolStep, no "current breathing" |
 | iholddelay=12 | iholddelay=10 | Marginally faster hold-drop |
-| vhighfs / vhighchm active | both off | No dcStep / VHIGH-fullstep above THIGH |
+| vhighfs / vhighchm active | both off | No VHIGH full-step above THIGH (balanced) |
 | chopper_freq_target = 20 kHz | 35 kHz | Less SpreadCycle hissing, slightly more switching loss |
 
 **If you were happy with the prior behaviour and want maximum performance, set `tuning_goal: performance` explicitly in your X/Y `[tmc5160 …]` sections.** That gives you bit-identical behaviour to before.
@@ -317,4 +302,4 @@ For Z and extruder, `tuning_goal: silent` is usually a strict upgrade unless you
 - All previous `driver_*` field overrides remain available and take precedence over autotune-derived values. The expanded set in *Pin-respecting field overrides* extends, rather than replaces, the prior `driver_TBL/TOFF/TPFD/HSTRT/HEND/SGTHRS/SGT/cs` list.
 - You can adopt the new tuning goals incrementally: leave existing axes untouched (they get `balanced`), set `tuning_goal: performance` on axes where the prior behaviour was specifically tuned for max torque.
 - The per-stepper homing profile is always active. To disable it on a specific axis, set every `homing_*` option to the value the autotune would have written for the run profile.
-- The CHOPCONF boundary validation (TOFF=1+TBL=0, dcStep+TOFF<3) is unconditional and fires for autotune-OFF configs too. It only triggers when the user pins both fields of a violating combination explicitly; existing configs that rely on autotune to choose one of the two are unaffected.
+- The CHOPCONF boundary validation (TOFF=1+TBL=0) is unconditional and fires for autotune-OFF configs too. It only triggers when the user pins both fields of a violating combination explicitly; existing configs that rely on autotune to choose one of the two are unaffected.

@@ -64,7 +64,6 @@ Registers = {
     "MSCURACT":         0x6B,
     "CHOPCONF":         0x6C,
     "COOLCONF":         0x6D,
-    "DCCTRL":           0x6E,
     "DRV_STATUS":       0x6F,
     "PWMCONF":          0x70,
     "PWM_SCALE":        0x71,
@@ -104,10 +103,6 @@ Fields["CHOPCONF"] = {
     "dedge":                    0x01 << 29,
     "diss2g":                   0x01 << 30,
     "diss2vs":                  0x01 << 31
-}
-Fields["DCCTRL"] = {
-    "dc_time":                  0x3FF << 0,    # AN-003 §4.1
-    "dc_sg":                    0xFF  << 16,   # AN-003 §4.2
 }
 Fields["DRV_CONF"] = {
     "bbmtime":                  0x1F << 0,
@@ -307,22 +302,15 @@ def _validate_short_conf(config, voltage, s2vs_level_pin, s2g_level_pin):
 def _validate_chopconf(config):
     """Guard CHOPCONF boundary constraints unconditionally.
 
-    The TOFF=1/TBL=0 and dcStep+TOFF<3 validations in tune_driver /
-    _configure_spreadcycle only fire for autotune-ON configs (motor: + voltage:
-    present).  A user with autotune OFF who pins driver_TOFF=1 + driver_TBL=0,
-    or who enables dcStep via driver_VHIGHFS=1 + driver_VHIGHCHM=1 with a low
-    driver_TOFF, would otherwise get silent mis-programming.  Both constraints
-    are TMC5160 datasheet limits (§5.2 CHOPCONF and §13.2 dcStep), not
-    autotune artefacts — they must be enforced at config-load time regardless
-    of autotune state.
+    The TOFF=1/TBL=0 validation in tune_driver / _configure_spreadcycle only
+    fires for autotune-ON configs (motor: + voltage: present).  A user with
+    autotune OFF who pins driver_TOFF=1 + driver_TBL=0 would otherwise get
+    silent mis-programming.  That combination is a TMC5160 datasheet limit
+    (§5.2 CHOPCONF), not an autotune artefact — it must be enforced at
+    config-load time regardless of autotune state.
     """
     toff_pin = config.getint('driver_TOFF', None, minval=1, maxval=15)
     tbl_pin  = config.getint('driver_TBL',  None, minval=0, maxval=3)
-    # VHIGHFS/VHIGHCHM are 1-bit fields; use getboolean so
-    # "driver_VHIGHFS: True" is accepted, matching set_config_field's own
-    # branch (maxval==1 → getboolean) and BaseTMCCurrentHelper.__init__.
-    vhighfs_pin  = config.getboolean('driver_VHIGHFS',  None)
-    vhighchm_pin = config.getboolean('driver_VHIGHCHM', None)
 
     # TOFF=1 with TBL=0 is invalid per TMC5160 datasheet §5.2 CHOPCONF.
     # Only raise when both are explicitly user-pinned; autotune chose one or
@@ -333,20 +321,6 @@ def _validate_chopconf(config):
             " the TMC5160 datasheet (\xa75.2 CHOPCONF); set driver_TBL"
             " to 1 or higher, or remove driver_TBL and let autotune"
             " choose." % (config.get_name(),))
-
-    # dcStep (activated when both vhighfs and vhighchm are set) requires
-    # TOFF>=3 per TMC5160 datasheet §13.2.  Only raise when all three pins
-    # are explicitly user-set; partial-pin configs rely on autotune to choose
-    # safe values via the corresponding check in tune_driver.
-    if (vhighfs_pin is not None and vhighchm_pin is not None
-            and toff_pin is not None
-            and vhighfs_pin and vhighchm_pin and toff_pin < 3):
-        raise config.error(
-            "tmc5160 %s: dcStep (driver_VHIGHFS=1 + driver_VHIGHCHM=1)"
-            " requires driver_TOFF>=3 per the TMC5160 datasheet (\xa713.2);"
-            " current driver_TOFF=%d.  Set driver_TOFF to 3 or higher,"
-            " or disable dcStep with driver_VHIGHFS=0."
-            % (config.get_name(), toff_pin))
 
 
 class TMC5160CurrentHelper(tmc.BaseTMCCurrentHelper):
@@ -636,14 +610,6 @@ class TMC5160:
         set_config_field(config, "pwm_lim", 12)
         #   TPOWERDOWN
         set_config_field(config, "tpowerdown", 10)
-        #   DCCTRL — pin user values into the shadow so _init_registers
-        # writes DCCTRL even when autotune is off (tune_driver returns early
-        # without motor:/voltage:, so _configure_dcstep is never called for
-        # autotune-OFF configs).  Default 0 matches the chip's reset value;
-        # driver_DC_TIME / driver_DC_SG pins override via set_config_field's
-        # getint path.
-        set_config_field(config, "dc_time", 0)
-        set_config_field(config, "dc_sg", 0)
 
 def load_config_prefix(config):
     return TMC5160(config)

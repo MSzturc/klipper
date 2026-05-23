@@ -956,7 +956,6 @@ TUNE_FLUSH_REGS = (
     "TPWMTHRS", "TCOOLTHRS", "THIGH",
     "SGTHRS", "SG4_THRS", "OTW_OV_VTH",
     "DRV_CONF",   # VS-aware filt_isense default lives here
-    "DCCTRL",     # dcStep tuning register
 )
 
 
@@ -1159,11 +1158,6 @@ class BaseTMCCurrentHelper:
         # DRV_CONF VS-aware defaults
         self.filt_isense = config.getint('driver_FILT_ISENSE', None,
                                           minval=0, maxval=3)
-        # DCCTRL pin-reads
-        self.dc_time = config.getint('driver_DC_TIME', None,
-                                      minval=0, maxval=0x3FF)
-        self.dc_sg = config.getint('driver_DC_SG', None,
-                                    minval=0, maxval=0xFF)
         # Pinning a driver_<FIELD> for a register field this driver lacks is a
         # config error, caught here at config-load rather than as a late
         # set_field KeyError when autotune runs at stepper-enable time.
@@ -1419,21 +1413,7 @@ class BaseTMCCurrentHelper:
         self._configure_coolstep()
         self._configure_overvoltage()
         self._configure_highspeed(motor_object, new_current)
-        # dcStep (activated when both vhighfs and vhighchm are set above
-        # THIGH) requires TOFF>=3 per TMC5160 datasheet §13.2.  Check after
-        # _configure_highspeed so both vhighfs/vhighchm and toff are final.
-        if (self.fields.lookup_register("vhighfs", None) is not None
-                and self.fields.lookup_register("vhighchm", None) is not None):
-            _toff_final = self.fields.get_field("toff")
-            if (self.fields.get_field("vhighfs")
-                    and self.fields.get_field("vhighchm") and _toff_final < 3):
-                raise self.printer.config_error(
-                    "tmc %s: dcStep requires TOFF>=3 per the TMC5160 datasheet"
-                    " (§13.2); current TOFF=%d. Set driver_TOFF to 3 or higher,"
-                    " or disable dcStep with driver_VHIGHFS=False."
-                    % (self.name, _toff_final))
         self._configure_drvconf()
-        self._configure_dcstep(motor_object, new_current)
         # Flush every register the _configure_* helpers may have dirtied.
         # Without this, tuned chopper / PWM / threshold values stay only
         # in the shadow cache and reach the hardware at the next bulk
@@ -1817,39 +1797,6 @@ class BaseTMCCurrentHelper:
         else:
             value = 1 if self.voltage and self.voltage > 52.0 else 0
         self.fields.set_field("filt_isense", value)
-    def _configure_dcstep(self, motor_object, current):
-        # dcStep DCCTRL register tuning.  Active only under the performance
-        # goal (vhighfs+vhighchm enabled above THIGH).  In balanced/silent
-        # the values are written for deterministic register state but have
-        # no effect.
-        if self.fields.lookup_register("dc_time", None) is None:
-            return  # driver does not support DCCTRL (TMC2209/2240)
-
-        # dc_time: AN-003 §4.1 — minimum is TBL_blank_cycles + 1, typical
-        # is the motor commutation time at the operating point.
-        tbl = self.fields.get_field("tbl")
-        tbl_cycles = {0: 16, 1: 24, 2: 36, 3: 54}[tbl]
-        commutation_cycles = int(motor_object.commutation_time(
-            voltage=self.voltage, current=current)
-            * self.driver_clock_frequency)
-        dc_time_default = max(tbl_cycles + 1, commutation_cycles)
-        dc_time_default = min(dc_time_default, 0x3FF)
-
-        if self.dc_time is not None:
-            dc_time = self.dc_time
-        else:
-            dc_time = dc_time_default
-
-        # dc_sg: AN-003 §4.2 — typically dc_time / 16
-        if self.dc_sg is not None:
-            dc_sg = self.dc_sg
-        else:
-            dc_sg = max(1, dc_time // 16)
-
-        logging.info("tmc %s autotune: dc_time=%d dc_sg=%d",
-                     self.name, dc_time, dc_sg)
-        self.fields.set_field("dc_time", dc_time)
-        self.fields.set_field("dc_sg", dc_sg)
     # Subclass hook --------------------------------------------------------
     def apply_current(self, print_time):
         raise NotImplementedError(

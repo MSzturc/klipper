@@ -181,12 +181,6 @@ class MockMotorConstants:
         # Return deterministic test values; real formula tested elsewhere
         return 5, 2
 
-    def commutation_time(self, voltage, current):
-        # Task 7: returns 8 µs so that commutation_cycles = 8e-6 * 12.5e6 = 100
-        # cycles, which with tbl_cycles+1 floor places dc_time in [30, 200]
-        # as required by TestPhase2DCCTRL.test_dc_time_auto_derive_performance.
-        return 8e-6
-
     def pwmfreq_to_hz(self, prescaler, fclk=12.5e6):
         # Mirrors MotorConstants.pwmfreq_to_hz — see motor_constants.py.
         # Needed for tune_invocation when driver_PWM_FREQ is pinned.
@@ -244,16 +238,12 @@ _TUNE_TEST_FIELDS = {
         "mres":           0x0F << 24,
         "vhighfs":        0x01 << 18,
         "vhighchm":       0x01 << 19,
-        # tbl is read by _configure_dcstep to determine blank cycles.
+        # tbl is read by _configure_spreadcycle.
         "tbl":            0x03 << 15,
         # toff is needed for the TOFF=1/TBL=0 validation path.
         "toff":           0x0F << 0,
         # tpfd is written by _configure_spreadcycle.
         "tpfd":           0x0F << 20,
-    },
-    "DCCTRL": {
-        "dc_time":        0x3FF << 0,
-        "dc_sg":          0xFF  << 16,
     },
     "GCONF": {
         "faststandstill":   0x01 << 1,
@@ -506,9 +496,6 @@ def tune_invocation(motor, tuning_goal='balanced', pins=None, voltage=56.0,
     proxy.sgt = _pins.get('driver_SGT', None)
     # DRV_CONF pin-reads
     proxy.filt_isense = _pins.get('driver_FILT_ISENSE', None)
-    # DCCTRL pin-reads
-    proxy.dc_time = _pins.get('driver_DC_TIME', None)
-    proxy.dc_sg = _pins.get('driver_DC_SG', None)
     # stealthchop_threshold velocity-form pin for tpwmthrs.  The
     # stealthchop_threshold= kwarg takes precedence over the pins= dict so
     # tests can supply it directly without polluting the pins dict (which is
@@ -544,24 +531,12 @@ def tune_invocation(motor, tuning_goal='balanced', pins=None, voltage=56.0,
     #   _configure_stallguard    — TCOOLTHRS + SGTHRS/SGT
     #   _configure_highspeed     — THIGH + VHIGHFS/VHIGHCHM + multistep_filt
     #   _configure_drvconf       — DRV_CONF VS-aware filt_isense
-    #   _configure_dcstep        — DCCTRL dc_time/dc_sg
     proxy._configure_pwm(motor, run_current)
     proxy._configure_spreadcycle(motor, run_current)
     proxy._configure_coolstep()
     proxy._configure_stallguard(run_current)
     proxy._configure_highspeed(motor, run_current)
-    # dcStep+TOFF<3 validation (mirrors tune_driver check). A 2209 field set
-    # has neither vhighfs nor vhighchm, so guard on field presence first.
-    if (fields.lookup_register("vhighfs", None) is not None
-            and fields.lookup_register("vhighchm", None) is not None):
-        if (fields.get_field("vhighfs") and fields.get_field("vhighchm")
-                and fields.get_field("toff") < 3):
-            raise proxy.printer.config_error(
-                "tmc %s: dcStep requires TOFF>=3 per the TMC5160 datasheet"
-                " (§13.2); current TOFF=%d."
-                % (proxy.name, fields.get_field("toff")))
     proxy._configure_drvconf()
-    proxy._configure_dcstep(motor, run_current)
 
     # Store FieldHelper for _last_tune_fields() accessor used by test helpers.
     _last_tune_fields_ref[0] = fields
