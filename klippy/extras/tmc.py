@@ -1041,6 +1041,10 @@ class BaseTMCCurrentHelper:
         self.stepper = None
         self._last_tuned_current = None
         self._autotune_skip_logged = False
+        self._skipped_fields = set()
+        # TOFF=1 (shortest off-time) requires a minimum blank time: TMC2209
+        # datasheet §5.5.1 mandates TBL>=2; the TMC5160 allows TBL>=1.
+        self.min_tbl_at_min_toff = {'tmc2209': 2}.get(self.driver_type, 1)
         # ------------------------------------------------------------
         # Per-stepper homing profile overrides.  Each is None by
         # default so the corresponding HOMING_DEFAULTS value applies.
@@ -1160,6 +1164,10 @@ class BaseTMCCurrentHelper:
                                       minval=0, maxval=0x3FF)
         self.dc_sg = config.getint('driver_DC_SG', None,
                                     minval=0, maxval=0xFF)
+        # Pinning a driver_<FIELD> for a register field this driver lacks is a
+        # config error, caught here at config-load rather than as a late
+        # set_field KeyError when autotune runs at stepper-enable time.
+        self._reject_unsupported_pins(config)
     # Introspection --------------------------------------------------------
     def needs_home_current_change(self):
         return self.actual_current != self.req_home_current
@@ -1318,6 +1326,14 @@ class BaseTMCCurrentHelper:
     def get_homing_cs(self):
         return self.homing_cs if self.homing_cs is not None \
             else HOMING_DEFAULTS['cs']
+    def _autotune_field_set_present(self):
+        # Autotune derives the full StealthChop2 + CoolStep register set.
+        # pwm_autograd (PWMCONF) and semin (COOLCONF) are present together only
+        # on TMC2209/5160/2240; TMC2130 (pwm_ampl, no autograd), TMC2208 (no
+        # COOLCONF) and TMC2660 (no PWMCONF) lack one or both — so they gate the
+        # capable family precisely.
+        return (self.fields.lookup_register("pwm_autograd", None) is not None
+                and self.fields.lookup_register("semin", None) is not None)
     # Autotuning ----------------------------------------------------------
     # Recomputes chopper / PWM / hysteresis / stallguard / overvoltage
     # parameters for the current operating point, writes them to the
@@ -1334,19 +1350,16 @@ class BaseTMCCurrentHelper:
     def tune_driver(self, new_current=0, force=False, print_time=None):
         if self.motor is None or self.voltage is None:
             return
-        # Autotune was designed for the TMC5160 / TMC2240 register set —
-        # the _configure_* helpers below write fields like pwm_autograd,
-        # pwm_ofs, pwm_reg, pwm_lim, tpfd, faststandstill, multistep_filt
-        # that the older drivers (TMC2130/2208/2209/2660) do not expose.
-        # `tpfd` is the cleanest single marker: it exists only on TMC5160
-        # and TMC2240.  Drivers without it skip with a one-shot info log
-        # so motor/voltage on an unsupported driver is a no-op rather
-        # than a hard crash on the first set_field of a missing field.
-        if self.fields.lookup_register("tpfd", None) is None:
+        # Autotune derives the full StealthChop2 + CoolStep register set, so it
+        # runs on the capable family (TMC2209/5160/2240) and skips drivers that
+        # lack it (TMC2130/2208/2660).  Optional fields the 2209 does not expose
+        # (tpfd, thigh, vhigh*, ...) are dropped per-write by
+        # _set_field_if_present rather than gating the whole driver out.
+        if not self._autotune_field_set_present():
             if not self._autotune_skip_logged:
-                logging.info("tmc %s: autotune disabled — driver lacks"
-                             " the TMC5160/TMC2240 PWMCONF/CHOPCONF"
-                             " field set", self.name)
+                logging.info("tmc %s: autotune disabled — driver lacks the"
+                             " StealthChop2/CoolStep field set (pwm_autograd+semin)",
+                             self.name)
                 self._autotune_skip_logged = True
             return
         # While the homing profile is active the chopper/coolstep
@@ -1409,16 +1422,16 @@ class BaseTMCCurrentHelper:
         # dcStep (activated when both vhighfs and vhighchm are set above
         # THIGH) requires TOFF>=3 per TMC5160 datasheet §13.2.  Check after
         # _configure_highspeed so both vhighfs/vhighchm and toff are final.
-        _toff_final = self.fields.get_field("toff")
-        _vhighfs_final = self.fields.get_field("vhighfs")
-        _vhighchm_final = self.fields.get_field("vhighchm")
-        if _vhighfs_final and _vhighchm_final and _toff_final < 3:
-            raise self.printer.config_error(
-                "tmc %s: dcStep requires TOFF>=3 per the TMC5160 datasheet"
-                " (§13.2); current TOFF=%d.  Set driver_TOFF to 3 or higher"
-                " when using performance goal (vhighfs+vhighchm enabled),"
-                " or disable dcStep with driver_VHIGHFS=False."
-                % (self.name, _toff_final))
+        if (self.fields.lookup_register("vhighfs", None) is not None
+                and self.fields.lookup_register("vhighchm", None) is not None):
+            _toff_final = self.fields.get_field("toff")
+            if (self.fields.get_field("vhighfs")
+                    and self.fields.get_field("vhighchm") and _toff_final < 3):
+                raise self.printer.config_error(
+                    "tmc %s: dcStep requires TOFF>=3 per the TMC5160 datasheet"
+                    " (§13.2); current TOFF=%d. Set driver_TOFF to 3 or higher,"
+                    " or disable dcStep with driver_VHIGHFS=False."
+                    % (self.name, _toff_final))
         self._configure_drvconf()
         self._configure_dcstep(motor_object, new_current)
         # Flush every register the _configure_* helpers may have dirtied.
@@ -1431,6 +1444,11 @@ class BaseTMCCurrentHelper:
             if reg in self.fields.registers:
                 self.mcu_tmc.set_register(reg, self.fields.registers[reg],
                                           print_time)
+        if self._skipped_fields and not self._autotune_skip_logged:
+            logging.info("tmc %s: autotune for %s — skipping fields absent on"
+                         " this driver: %s", self.name, self.driver_type,
+                         ", ".join(sorted(self._skipped_fields)))
+            self._autotune_skip_logged = True
         # Cache the operating point only after the tune has actually
         # landed in hardware.  An earlier failure path (motor lookup,
         # stepper resolution, sense_resistor missing) returns without
@@ -1446,6 +1464,36 @@ class BaseTMCCurrentHelper:
             return
         tstep = TMCtstepHelper(self.mcu_tmc, velocity, pstepper=self.stepper)
         self.fields.set_field(field, tstep)
+    # driver_<OPTION> → register field for fields that some autotune-family
+    # drivers lack (TMC2209 has none of these). Pinning one for an absent field
+    # is a config error rather than a silent no-op.
+    _OPTIONAL_PIN_FIELDS = {
+        'driver_TPFD': 'tpfd', 'driver_SGT': 'sgt', 'driver_THIGH': 'thigh',
+        'driver_VHIGHFS': 'vhighfs', 'driver_VHIGHCHM': 'vhighchm',
+        'driver_FASTSTANDSTILL': 'faststandstill',
+        'driver_SMALL_HYSTERESIS': 'small_hysteresis', 'driver_SFILT': 'sfilt',
+    }
+
+    def _reject_unsupported_pins(self, config):
+        for pin_name, field_name in self._OPTIONAL_PIN_FIELDS.items():
+            if (config.get(pin_name, None) is not None
+                    and self.fields.lookup_register(field_name, None) is None):
+                raise config.error(
+                    "%s: %s is not supported on %s (driver has no '%s' register"
+                    " field)" % (config.get_name(), pin_name, self.driver_type,
+                                 field_name))
+    def _set_field_if_present(self, field_name, value):
+        # Write a tuning field only when this driver actually has it. Optional
+        # fields (tpfd, thigh, vhighfs, vhighchm, faststandstill,
+        # small_hysteresis, sfilt, sgt) are absent on the TMC2209/2208 register
+        # set; autotune skips them here. Explicit driver_<FIELD> pins for absent
+        # fields are rejected at config-load time (see __init__), so reaching
+        # this point with an absent field is always an autotune-derived value
+        # that is safe to drop.
+        if self.fields.lookup_register(field_name, None) is None:
+            self._skipped_fields.add(field_name)
+            return
+        self.fields.set_field(field_name, value)
     def _configure_pwm(self, motor_object, new_current):
         # Per-field: user pin wins; otherwise derive from motor model or goal.
         if self.pwm_freq is not None:
@@ -1582,18 +1630,19 @@ class BaseTMCCurrentHelper:
             toff = max(toff - 1, 1)
         else:
             toff = self.toff
-        # TOFF=1 with TBL=0 is invalid per TMC5160 datasheet §5.2.
+        # TOFF=1 (shortest off-time) requires a minimum blank time per the
+        # datasheet (CHOPCONF): TMC2209 mandates TBL>=2, TMC5160 allows TBL>=1.
         # When BOTH fields are user-pinned, raise an error instead of silently
         # correcting — silent correction is only safe when autotune chose one
         # or both values.
-        if toff == 1 and tbl == 0:
+        if toff == 1 and tbl < self.min_tbl_at_min_toff:
             if self.toff is not None and self.tbl is not None:
                 raise self.printer.config_error(
-                    "tmc %s: driver_TOFF=1 with driver_TBL=0 is invalid per"
-                    " the TMC5160 datasheet (§5.2 CHOPCONF); set driver_TBL"
-                    " to 1 or higher, or remove one of the pins and let"
-                    " autotune choose." % (self.name,))
-            tbl = 1
+                    "tmc %s: driver_TOFF=1 requires driver_TBL>=%d on %s per the"
+                    " datasheet (CHOPCONF); raise driver_TBL or remove one of the"
+                    " pins and let autotune choose."
+                    % (self.name, self.min_tbl_at_min_toff, self.driver_type))
+            tbl = self.min_tbl_at_min_toff
             tblank = 16.0 * (1.5 ** tbl) / self.driver_clock_frequency
         tsd_duty = (24.0 + 32.0 * toff) / self.driver_clock_frequency
         # Allocate the remaining cycle time to TPFD (passive fast decay).
@@ -1612,10 +1661,16 @@ class BaseTMCCurrentHelper:
             tpfd = max(0, min(15, int(math.ceil(pfdcycles / 128.))))
         logging.info("tmc %s autotune: tbl=%d toff=%d tpfd=%d",
                      self.name, tbl, toff, tpfd)
-        self.fields.set_field("tpfd", tpfd)
+        self._set_field_if_present("tpfd", tpfd)
         self.fields.set_field("tbl", tbl)
         self.fields.set_field("toff", toff)
         return tbl, toff
+    def _hysteresis_scale(self, current):
+        # Current-scale (CS) used for the hysteresis derivation. Default: the
+        # explicit driver_cs override, or None to let motor_constants.hysteresis
+        # auto-derive from the sense resistor. The vsense-based current path
+        # overrides this so hstrt/hend match the real programmed CS.
+        return self.cs
     def _configure_hysteresis(self, motor_object, new_current,
                               new_tbl, new_toff):
         # Allow partial pinning: if the user set only one of driver_HSTRT /
@@ -1628,7 +1683,8 @@ class BaseTMCCurrentHelper:
             name=self.name, extra=self.extra_hysteresis,
             fclk=self.driver_clock_frequency, volts=self.voltage,
             current=new_current, tbl=new_tbl, toff=new_toff,
-            rsense=self.sense_resistor, scale=self.cs)
+            rsense=self.sense_resistor,
+            scale=self._hysteresis_scale(new_current))
         hstrt = self.hstrt if self.hstrt is not None else hstrt_auto
         hend = self.hend if self.hend is not None else hend_auto
         self.fields.set_field("hstrt", hstrt)
@@ -1642,7 +1698,7 @@ class BaseTMCCurrentHelper:
             if self.sg4_thrs is not None:
                 self.fields.set_field("sgthrs", self.sg4_thrs)
         if self.sgt is not None:
-            self.fields.set_field("sgt", self.sgt)
+            self._set_field_if_present("sgt", self.sgt)
         # tcoolthrs precedence: raw driver_TCOOLTHRS > velocity-form
         # coolstep_threshold > goal-default
         if self.tcoolthrs_pin is not None:
@@ -1679,14 +1735,14 @@ class BaseTMCCurrentHelper:
                             if self.small_hysteresis is not None
                             else self._derive_small_hysteresis())
 
-        self.fields.set_field("faststandstill", faststandstill)
-        self.fields.set_field("small_hysteresis", small_hysteresis)
+        self._set_field_if_present("faststandstill", faststandstill)
+        self._set_field_if_present("small_hysteresis", small_hysteresis)
         self.fields.set_field("semin", semin)
         self.fields.set_field("semax", semax)
         self.fields.set_field("seup", seup)
         self.fields.set_field("sedn", sedn)
         self.fields.set_field("seimin", seimin)
-        self.fields.set_field("sfilt", sfilt)
+        self._set_field_if_present("sfilt", sfilt)
         self.fields.set_field("iholddelay", iholddelay)
 
     def _coolstep_defaults_for_goal(self):
@@ -1723,7 +1779,7 @@ class BaseTMCCurrentHelper:
 
         # THIGH precedence: raw > velocity > goal-default
         if self.thigh_pin is not None:
-            self.fields.set_field("thigh", self.thigh_pin)
+            self._set_field_if_present("thigh", self.thigh_pin)
         elif self.high_velocity_threshold is not None:
             self._set_velocity_field("thigh", self.high_velocity_threshold)
         elif thigh_default_velocity is not None:
@@ -1732,7 +1788,7 @@ class BaseTMCCurrentHelper:
             # balanced/silent: no high-velocity threshold; matches
             # Klipper upstream TMCVhighHelper default of THIGH=0 (CoolStep
             # window remains open up to physical limits).
-            self.fields.set_field("thigh", 0)
+            self._set_field_if_present("thigh", 0)
 
         # vhighfs / vhighchm: Goal-aware (only performance enables)
         vhighfs_default = (self.tuning_goal == 'performance')
@@ -1741,8 +1797,8 @@ class BaseTMCCurrentHelper:
                    else vhighfs_default)
         vhighchm = (self.vhighchm if self.vhighchm is not None
                     else vhighchm_default)
-        self.fields.set_field("vhighfs", vhighfs)
-        self.fields.set_field("vhighchm", vhighchm)
+        self._set_field_if_present("vhighfs", vhighfs)
+        self._set_field_if_present("vhighchm", vhighchm)
 
         # multistep_filt rides with the high-speed register flush; it is a
         # GCONF flag but logically tied to high-speed motion smoothing.

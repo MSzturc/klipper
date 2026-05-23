@@ -654,3 +654,49 @@ class TestSentinelHandlingAndAutotuneOffValidation:
         tmc5160_mod = _load_tmc5160_module()
         cfg = MockConfig(values={'driver_TOFF': 1})
         tmc5160_mod._validate_chopconf(cfg)  # must not raise
+
+
+class TestCapabilityGate:
+    def test_field_set_present_true_for_full_set(self):
+        from .conftest import _load_tmc_module, MockMcuTmc, _TUNE_TEST_FIELDS
+        tmc = _load_tmc_module()
+        fields = tmc.FieldHelper(_TUNE_TEST_FIELDS, [])
+        proxy = object.__new__(tmc.BaseTMCCurrentHelper)
+        proxy.fields = fields
+        assert proxy._autotune_field_set_present() is True
+
+    def test_field_set_absent_without_pwm_autograd(self):
+        from .conftest import _load_tmc_module
+        tmc = _load_tmc_module()
+        # COOLCONF.semin present, PWMCONF without pwm_autograd → 2130-like
+        fields = tmc.FieldHelper(
+            {"PWMCONF": {"pwm_ampl": 0xFF}, "COOLCONF": {"semin": 0x0F}}, [])
+        proxy = object.__new__(tmc.BaseTMCCurrentHelper)
+        proxy.fields = fields
+        assert proxy._autotune_field_set_present() is False
+
+    def test_field_set_absent_without_semin(self):
+        from .conftest import _load_tmc_module
+        tmc = _load_tmc_module()
+        # PWMCONF full, no COOLCONF → 2208-like
+        fields = tmc.FieldHelper(
+            {"PWMCONF": {"pwm_autograd": 0x01 << 19}}, [])
+        proxy = object.__new__(tmc.BaseTMCCurrentHelper)
+        proxy.fields = fields
+        assert proxy._autotune_field_set_present() is False
+
+    def test_tune_driver_returns_early_on_incapable_driver(self):
+        # motor/voltage set + a 2130-like field set (no pwm_autograd) → the gate
+        # must make tune_driver() return early without crashing on a missing
+        # field. (Exercises tune_driver(), not just the helper.)
+        from .conftest import _load_tmc_module
+        tmc = _load_tmc_module()
+        fields = tmc.FieldHelper(
+            {"PWMCONF": {"pwm_ampl": 0xFF}, "COOLCONF": {"semin": 0x0F}}, [])
+        proxy = object.__new__(tmc.BaseTMCCurrentHelper)
+        proxy.fields = fields
+        proxy.motor = "ldo"
+        proxy.voltage = 24.0
+        proxy.name = "stepper_x"
+        proxy._autotune_skip_logged = False
+        proxy.tune_driver()  # must not raise

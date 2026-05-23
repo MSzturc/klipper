@@ -286,6 +286,32 @@ _TUNE_TEST_FIELDS = {
         "filt_isense":    0x03 << 20,
     },
 }
+# TMC2209 register/field surface (tmc2208.Fields + tmc2209 COOLCONF/SGTHRS/
+# TCOOLTHRS). Used to exercise the field-aware autotune path on a driver that
+# lacks tpfd/thigh/vhigh*/faststandstill/small_hysteresis/sfilt/sgt.
+_TUNE_TEST_FIELDS_2209 = {
+    "PWMCONF": {
+        "pwm_ofs": 0xFF << 0, "pwm_grad": 0xFF << 8, "pwm_freq": 0x03 << 16,
+        "pwm_autoscale": 0x01 << 18, "pwm_autograd": 0x01 << 19,
+        "freewheel": 0x03 << 20, "pwm_reg": 0xF << 24, "pwm_lim": 0xF << 28,
+    },
+    "TPWMTHRS": {"tpwmthrs": 0xfffff << 0},
+    "CHOPCONF": {
+        "toff": 0x0F << 0, "hstrt": 0x07 << 4, "hend": 0x0F << 7,
+        "tbl": 0x03 << 15, "vsense": 0x01 << 17, "mres": 0x0F << 24,
+        "intpol": 0x01 << 28, "dedge": 0x01 << 29,
+    },
+    "GCONF": {
+        "en_spreadcycle": 0x01 << 2, "multistep_filt": 0x01 << 8,
+    },
+    "COOLCONF": {
+        "semin": 0x0F << 0, "seup": 0x03 << 5, "semax": 0x0F << 8,
+        "sedn": 0x03 << 13, "seimin": 0x01 << 15,
+    },
+    "TCOOLTHRS": {"tcoolthrs": 0xfffff << 0},
+    "SGTHRS": {"sgthrs": 0xFF << 0},
+    "IHOLDIRUN": {"iholddelay": 0x0F << 16},
+}
 _TUNE_TEST_SIGNED_FIELDS = []
 
 # Module-level storage for the FieldHelper from the most recent tune_invocation.
@@ -379,7 +405,7 @@ def _load_tmc5160_module():
 
 def tune_invocation(motor, tuning_goal='balanced', pins=None, voltage=56.0,
                     run_current=1.768, stealthchop_threshold=None,
-                    pre_field_writes=None):
+                    pre_field_writes=None, fields=None, driver_type='tmc5160'):
     """Construct a thin BaseTMCCurrentHelper-like proxy, run _configure_pwm,
     and return the resulting PWMCONF + TPWMTHRS field-shadow values as a dict.
 
@@ -416,7 +442,8 @@ def tune_invocation(motor, tuning_goal='balanced', pins=None, voltage=56.0,
     _val_cfg = MockConfig(values={})
     tmc5160._validate_short_conf(_val_cfg, voltage, _s2vs, _s2g)
 
-    fields = tmc.FieldHelper(_TUNE_TEST_FIELDS, _TUNE_TEST_SIGNED_FIELDS)
+    fields = tmc.FieldHelper(fields if fields is not None else _TUNE_TEST_FIELDS,
+                             _TUNE_TEST_SIGNED_FIELDS)
     mcu_tmc = MockMcuTmc(fields)
 
     # Simulate TMCStealthchopHelper having set en_pwm_mode=1 prior to
@@ -434,6 +461,9 @@ def tune_invocation(motor, tuning_goal='balanced', pins=None, voltage=56.0,
     # Build a proxy that satisfies BaseTMCCurrentHelper._configure_pwm.
     proxy = object.__new__(tmc.BaseTMCCurrentHelper)
     proxy.name = "stepper_x"
+    proxy.driver_type = driver_type
+    proxy._skipped_fields = set()
+    proxy.min_tbl_at_min_toff = {'tmc2209': 2}.get(driver_type, 1)
     proxy.fields = fields
     proxy.mcu_tmc = mcu_tmc
     proxy.driver_clock_frequency = 12.5e6
@@ -520,41 +550,36 @@ def tune_invocation(motor, tuning_goal='balanced', pins=None, voltage=56.0,
     proxy._configure_coolstep()
     proxy._configure_stallguard(run_current)
     proxy._configure_highspeed(motor, run_current)
-    # dcStep+TOFF<3 validation (mirrors tune_driver check)
-    _toff_final = fields.get_field("toff")
-    _vhighfs_final = fields.get_field("vhighfs")
-    _vhighchm_final = fields.get_field("vhighchm")
-    if _vhighfs_final and _vhighchm_final and _toff_final < 3:
-        raise proxy.printer.config_error(
-            "tmc %s: dcStep requires TOFF>=3 per the TMC5160 datasheet"
-            " (§13.2); current TOFF=%d." % (proxy.name, _toff_final))
+    # dcStep+TOFF<3 validation (mirrors tune_driver check). A 2209 field set
+    # has neither vhighfs nor vhighchm, so guard on field presence first.
+    if (fields.lookup_register("vhighfs", None) is not None
+            and fields.lookup_register("vhighchm", None) is not None):
+        if (fields.get_field("vhighfs") and fields.get_field("vhighchm")
+                and fields.get_field("toff") < 3):
+            raise proxy.printer.config_error(
+                "tmc %s: dcStep requires TOFF>=3 per the TMC5160 datasheet"
+                " (§13.2); current TOFF=%d."
+                % (proxy.name, fields.get_field("toff")))
     proxy._configure_drvconf()
     proxy._configure_dcstep(motor, run_current)
 
     # Store FieldHelper for _last_tune_fields() accessor used by test helpers.
     _last_tune_fields_ref[0] = fields
 
-    # Return PWMCONF + tpwmthrs + CoolStep/GCONF/threshold fields as a flat dict.
+    # Return PWMCONF + tpwmthrs + CoolStep/GCONF/threshold fields as a flat
+    # dict. Reads are presence-guarded so a 2209 invocation (which lacks
+    # tpfd/thigh/vhigh*/etc) does not KeyError when building the return dict.
+    def _get(name):
+        reg = fields.lookup_register(name, None)
+        return fields.get_field(name) if reg is not None else None
     result = {f: fields.get_field(f)
-              for f in _TUNE_TEST_FIELDS.get('PWMCONF', {})}
-    result['tpwmthrs'] = fields.get_field('tpwmthrs')
-    result['faststandstill'] = fields.get_field('faststandstill')
-    result['small_hysteresis'] = fields.get_field('small_hysteresis')
-    result['multistep_filt'] = fields.get_field('multistep_filt')
-    result['semin'] = fields.get_field('semin')
-    result['semax'] = fields.get_field('semax')
-    result['seup'] = fields.get_field('seup')
-    result['sedn'] = fields.get_field('sedn')
-    result['seimin'] = fields.get_field('seimin')
-    result['sfilt'] = fields.get_field('sfilt')
-    result['iholddelay'] = fields.get_field('iholddelay')
-    result['tcoolthrs'] = fields.get_field('tcoolthrs')
-    result['thigh'] = fields.get_field('thigh')
-    result['vhighfs'] = fields.get_field('vhighfs')
-    result['vhighchm'] = fields.get_field('vhighchm')
-    result['filt_isense'] = fields.get_field('filt_isense')
-    result['otselect'] = fields.get_field('otselect')
-    result['en_pwm_mode'] = fields.get_field('en_pwm_mode')
+              for f in fields.all_fields.get('PWMCONF', {})}
+    for f in ('tpwmthrs', 'faststandstill', 'small_hysteresis', 'multistep_filt',
+              'semin', 'semax', 'seup', 'sedn', 'seimin', 'sfilt', 'iholddelay',
+              'tcoolthrs', 'thigh', 'vhighfs', 'vhighchm', 'filt_isense',
+              'otselect', 'en_pwm_mode', 'en_spreadcycle', 'tpfd', 'sgthrs'):
+        result[f] = _get(f)
+    result['_skipped_fields'] = sorted(getattr(proxy, '_skipped_fields', set()))
     return result
 
 

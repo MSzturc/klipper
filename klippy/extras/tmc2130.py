@@ -159,6 +159,16 @@ class TMCCurrentHelper(tmc.BaseTMCCurrentHelper):
                     irun = irun2
         ihold = self._calc_current_bits(min(hold_current, run_current), vsense)
         return vsense, irun, ihold
+    def _hysteresis_scale(self, current):
+        # vsense path: hstrt/hend depend on the real CS bits, which depend on
+        # vsense (0.32 vs 0.18 V full-scale, TMC2209 datasheet §9). Recompute the
+        # IRUN bits for the tuning current so the hysteresis matches what the
+        # driver is programmed to, instead of the generic rsense*32*I/0.32
+        # fallback in motor_constants.hysteresis.
+        if self.cs is not None:
+            return self.cs
+        _vsense, irun, _ihold = self._calc_current(current, self.req_hold_current)
+        return irun
     def get_current(self):
         irun = self.fields.get_field("irun")
         ihold = self.fields.get_field("ihold")
